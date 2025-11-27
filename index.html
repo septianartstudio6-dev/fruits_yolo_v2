@@ -1,217 +1,476 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Fruit Detection TFJS</title>
-
-<!-- TensorFlow -->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Fruit Detector TFJS (YOLOv8)</title>
 <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.19.0/dist/tf.min.js"></script>
-
 <style>
-    body {
-        font-family: Arial, sans-serif;
-        background: #f2f2f2;
-        margin: 0;
-        padding: 20px;
-        text-align: center;
-    }
-
-    #video {
-        width: 640px;
-        height: 480px;
-        border-radius: 10px;
-        background: #000;
-    }
-
-    #canvas {
-        position: absolute;
-        top: 0;
-        left: 0;
-    }
-
-    #container {
-        display: inline-block;
-        position: relative;
-    }
-
-    h2 {
-        margin-bottom: 10px;
-    }
-
-    button, select {
-        padding: 10px 20px;
-        margin: 10px;
-        border: none;
-        background: #007bff;
-        color: white;
-        font-size: 16px;
-        border-radius: 6px;
-        cursor: pointer;
-    }
-
-    button:hover, select:hover {
-        background: #0056b3;
-    }
-
-    #thresholdBox {
-        margin-top: 10px;
-        font-size: 18px;
-    }
-
-    input[type="range"] {
-        width: 200px;
-    }
+  body{font-family:Inter,Arial,Helvetica,sans-serif;background:#f3f4f6;margin:0;padding:18px;text-align:center}
+  h1{margin:6px 0 14px;font-size:20px}
+  #controls{display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;margin-bottom:12px}
+  select,button,input[type=range]{padding:8px;border-radius:8px;border:1px solid #d1d5db}
+  #container{position:relative;display:inline-block;background:#000;border-radius:10px;overflow:hidden}
+  video{display:block;width:640px;height:480px;object-fit:cover}
+  canvas{position:absolute;left:0;top:0;width:640px;height:480px;pointer-events:none}
+  #status{margin-top:12px;color:#374151}
+  .label-badge{position:absolute;padding:4px 8px;border-radius:6px;background:rgba(0,0,0,0.6);color:#fff;font-weight:600;font-size:13px}
+  #footer{margin-top:10px;font-size:13px;color:#6b7280}
 </style>
 </head>
 <body>
+<h1>Fruit Detector — TFJS (YOLOv8)</h1>
 
-<h2>Fruit Detector - TensorFlow.js</h2>
-
-<!-- Camera options -->
-<select id="cameraSelect">
-    <option value="environment">📷 Back Camera</option>
-    <option value="user">🤳 Front Camera</option>
-</select>
-
-<button onclick="startCamera()">Start Camera</button>
-
-<div id="thresholdBox">
-    Threshold: <span id="thVal">50</span>%  
-    <br>
-    <input type="range" id="threshold" min="10" max="100" value="50" oninput="updateThreshold()">
+<div id="controls">
+  <select id="cameraSelect">
+    <option value="environment">📷 Back camera</option>
+    <option value="user">🤳 Front camera</option>
+  </select>
+  <button id="startBtn">Start Camera</button>
+  <label>Threshold: <span id="thVal">50</span>%</label>
+  <input id="threshold" type="range" min="10" max="100" value="50" />
+  <label>Max detections:
+    <input id="maxDet" type="number" min="1" max="200" value="50" style="width:70px;margin-left:6px"/>
+  </label>
 </div>
 
 <div id="container">
-    <video id="video" autoplay playsinline></video>
-    <canvas id="canvas" width="640" height="480"></canvas>
+  <video id="video" autoplay playsinline></video>
+  <canvas id="overlay" width="640" height="480"></canvas>
 </div>
 
+<div id="status">Model: <span id="modelStatus">not loaded</span> · Tip: buka Console (F12) untuk debug output.</div>
+<div id="footer">Model URL: <code>vkduvjyfrrjlckkk.public.blob.vercel-storage.com/model.json</code></div>
+
 <script>
-/* ===========================
-   1. Load Model and Class Names
-   =========================== */
+(async()=>{
 
-const modelUrl = "https://vkduvjyfrrjlckkk.public.blob.vercel-storage.com/model.json";
+// ------------- CONFIG -------------
+const MODEL_URL = "https://vkduvjyfrrjlckkk.public.blob.vercel-storage.com/model.json";
+const INPUT_SIZE = 640;               // model expects 640x640 (per metadata)
+let scoreThreshold = 0.5;             // adjustable
+let iouThreshold = 0.45;              // NMS IOU
+let maxDetections = 50;
 
-let model;
-let threshold = 0.5;
-
-// Class names from your metadata.yaml
+// Class names (from metadata.yaml)
 const classNames = [
-    "Alpukat","Anggur","Apel","Apel Hijau","Jeruk","Lemon","Mangga",
-    "Melon","Nanas","Pepaya","Pir","Pisang","Rambutan","Salak",
-    "Semangka","Stroberi"
+ "Alpukat","Anggur","Apel","Apel Hijau","Jeruk","Lemon","Mangga",
+ "Melon","Nanas","Pepaya","Pir","Pisang","Rambutan","Salak",
+ "Semangka","Stroberi"
 ];
 
-function updateThreshold() {
-    const val = document.getElementById("threshold").value;
-    threshold = val / 100;
-    document.getElementById("thVal").innerText = val;
+// UI elements
+const video = document.getElementById("video");
+const canvas = document.getElementById("overlay");
+const ctx = canvas.getContext("2d");
+const startBtn = document.getElementById("startBtn");
+const cameraSelect = document.getElementById("cameraSelect");
+const thSlider = document.getElementById("threshold");
+const thVal = document.getElementById("thVal");
+const modelStatus = document.getElementById("modelStatus");
+const maxDetInput = document.getElementById("maxDet");
+
+thSlider.oninput = ()=>{ scoreThreshold = thSlider.value/100; thVal.innerText = thSlider.value; };
+maxDetInput.onchange = ()=>{ let v=parseInt(maxDetInput.value)||50; maxDetections = Math.max(1,Math.min(200,v)); };
+
+// state
+let model=null;
+let stream=null;
+let running=false;
+let outputSpec = null; // will hold runtime info about model outputs
+
+// ------------- UTILITIES -------------
+function drawBoxes(boxes, scores, classes) {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.lineWidth = 2;
+  for (let i=0;i<boxes.length;i++){
+    const b = boxes[i]; // [xmin,ymin,xmax,ymax] absolute pixels
+    const score = scores[i];
+    const cls = classes[i];
+    // box
+    ctx.strokeStyle = "rgba(255,0,80,0.9)";
+    ctx.strokeRect(b[0], b[1], b[2]-b[0], b[3]-b[1]);
+    // label
+    const label = `${classNames[cls]||cls} ${(score*100).toFixed(1)}%`;
+    const textW = ctx.measureText(label).width + 10;
+    const th = 18;
+    ctx.fillStyle = "rgba(255,0,80,0.9)";
+    ctx.fillRect(b[0]-1, Math.max(0,b[1]-th), textW, th);
+    ctx.fillStyle = "#fff";
+    ctx.font = "14px Arial";
+    ctx.fillText(label, b[0]+4, Math.max(12, b[1]-3));
+  }
 }
 
-/* ===========================
-   2. Start Camera (front/back)
-   =========================== */
-async function startCamera() {
-    const video = document.getElementById("video");
-    const cameraMode = document.getElementById("cameraSelect").value;
+// Convert center x,y,w,h (normalized) -> [xmin,ymin,xmax,ymax] absolute on canvas
+function cxcywhToBoxes(arr, width, height){
+  const out = [];
+  for (let i=0;i<arr.length;i++){
+    const [cx,cy,w,h] = arr[i];
+    const x = cx * width;
+    const y = cy * height;
+    const bw = w * width;
+    const bh = h * height;
+    const xmin = Math.max(0, x - bw/2);
+    const ymin = Math.max(0, y - bh/2);
+    const xmax = Math.min(width, x + bw/2);
+    const ymax = Math.min(height, y + bh/2);
+    out.push([xmin,ymin,xmax,ymax]);
+  }
+  return out;
+}
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: cameraMode }
+// Safe tensor dispose helper
+function disposeAll(tensors){
+  if(!tensors) return;
+  if(Array.isArray(tensors)){
+    tensors.forEach(t=>{ try{ t.dispose(); }catch(e){} });
+  } else {
+    try{ tensors.dispose(); } catch(e){}
+  }
+}
+
+// ------------- MODEL LOADING + OUTPUT INSPECTION -------------
+async function loadModelAndInspect(){
+  modelStatus.innerText = "loading...";
+  console.log("Loading model from:", MODEL_URL);
+  model = await tf.loadGraphModel(MODEL_URL);
+  modelStatus.innerText = "loaded";
+  console.log("Model loaded:", model);
+
+  // Run a dummy inference to understand outputs
+  const dummy = tf.zeros([1, INPUT_SIZE, INPUT_SIZE, 3], "float32");
+  let outputs = null;
+  try{
+    outputs = await model.executeAsync(dummy);
+  }catch(err){
+    console.warn("executeAsync error:", err);
+    // try calling model.predict if executeAsync fails
+    try{ outputs = model.predict(dummy); }catch(e){ console.error("predict also failed", e); throw e; }
+  } finally {
+    dummy.dispose();
+  }
+
+  // Normalize outputs to array of tensors
+  let outTensors = [];
+  if(!outputs){ throw new Error("Model returned no outputs"); }
+  if(Array.isArray(outputs)){
+    outTensors = outputs;
+  } else if (outputs instanceof tf.Tensor){
+    outTensors = [outputs];
+  } else if (typeof outputs === 'object' && outputs !== null){
+    // named outputs: convert values to array
+    outTensors = Object.values(outputs);
+  }
+
+  // Log shapes
+  console.log("Model output tensors count:", outTensors.length);
+  outTensors.forEach((t,i)=>console.log(`OUT[${i}].shape =`, t.shape, "dtype:", t.dtype));
+
+  // Save spec for runtime decoding
+  outputSpec = outTensors.map(t => ({shape: t.shape, dtype: t.dtype}));
+  // keep the outputs for immediate disposal below
+  disposeAll(outTensors);
+  return outputSpec;
+}
+
+// ------------- PREDICTION DECODER (heuristic) -------------
+/*
+We support multiple output formats:
+1) Single tensor [1, N, C] where C = 4 + 1 + num_classes
+   -> each row: [x, y, w, h, obj, class0, class1, ...]
+2) Array of tensors: [boxes: (1,N,4), class_logits: (1,N,num_classes), scores: (1,N)] or similar
+3) Named output 'Identity' -> try decode like (1,N,C)
+*/
+
+function choosePredictionTensorInfo(spec){
+  // spec: array of {shape:..., dtype:...}
+  const numClasses = classNames.length;
+
+  // Case A: find tensor with shape [1, N, C] where C >= 4 + 1 + numClasses - that's likely final preds
+  for (let i=0;i<spec.length;i++){
+    const s = spec[i].shape;
+    if (Array.isArray(s) && s.length===3 && s[0]===1){
+      const C = s[2];
+      if (C >= 4 + 1 + numClasses - 1) { // be permissive
+        return {mode:"single3", tensorIndex:i, numPreds:s[1], channels:C};
+      }
+    }
+  }
+
+  // Case B: find combination [1,N,4] + [1,N,numClasses]
+  let idxBox=-1, idxClass=-1, idxScore=-1;
+  for (let i=0;i<spec.length;i++){
+    const s = spec[i].shape;
+    if (Array.isArray(s) && s.length===3 && s[0]===1 && s[2]===4) idxBox = i;
+  }
+  for (let i=0;i<spec.length;i++){
+    const s = spec[i].shape;
+    if (Array.isArray(s) && s.length===3 && s[0]===1 && s[2]===numClasses) idxClass = i;
+  }
+  for (let i=0;i<spec.length;i++){
+    const s = spec[i].shape;
+    if (Array.isArray(s) && s.length===2 && s[0]===1) idxScore = i;
+  }
+  if (idxBox>=0 && idxClass>=0){
+    return {mode:"split", boxIndex:idxBox, classIndex:idxClass, scoreIndex:idxScore};
+  }
+
+  // Fallback: if single tensor [1, X] maybe flattened: attempt to reshape to [1, N, C] by heuristics
+  for (let i=0;i<spec.length;i++){
+    const s = spec[i].shape;
+    if (Array.isArray(s) && s.length===2 && s[0]===1){
+      const total = s[1];
+      // try to find N such that C = 4+1+numClasses divides total
+      const candidateC = 4+1+numClasses;
+      if (total % candidateC === 0){
+        const N = total / candidateC;
+        return {mode:"single2_flat", tensorIndex:i, numPreds:N, channels:candidateC};
+      }
+    }
+  }
+
+  // If nothing matched, return first tensor as fallback
+  return {mode:"unknown", tensorIndex:0};
+}
+
+async function decodePredictions(outputs, spec){
+  // outputs can be: tensor, array of tensors, or named object
+  // first convert to array aligned with spec
+  let outTensors = [];
+  if(Array.isArray(outputs)) outTensors = outputs;
+  else if (outputs instanceof tf.Tensor) outTensors = [outputs];
+  else outTensors = Object.values(outputs);
+
+  const info = choosePredictionTensorInfo(spec);
+  console.log("Decoding strategy:", info);
+
+  let boxesAbs = [], scores = [], classes = [];
+
+  if (info.mode === "single3"){
+    const t = outTensors[info.tensorIndex]; // shape [1,N,C]
+    const arr = await t.array(); // small-ish, may be large but acceptable for demo
+    const preds = arr[0]; // [N, C]
+    const N = preds.length;
+    const C = info.channels;
+    for (let i=0;i<N;i++){
+      const row = preds[i];
+      // assume layout: [x, y, w, h, obj, class0, class1,...]
+      const cx = row[0], cy = row[1], w = row[2], h = row[3];
+      const obj = row[4];
+      const class_probs = row.slice(5, 5 + classNames.length);
+      // get class id & score
+      let bestIdx = 0, bestProb = -Infinity;
+      for (let c=0;c<class_probs.length;c++){
+        if (class_probs[c] > bestProb){ bestProb = class_probs[c]; bestIdx = c; }
+      }
+      // often class_probs are logits -> apply sigmoid/softmax? but in many TF exports they are already probs
+      // make score = obj * bestProb
+      const sc = Math.max(0, Math.min(1, obj * bestProb));
+      if (sc < scoreThreshold) continue;
+      boxesAbs.push(cxcywhToBoxes([[cx,cy,w,h]], canvas.width, canvas.height)[0]);
+      scores.push(sc);
+      classes.push(bestIdx);
+    }
+
+  } else if (info.mode === "split"){
+    const boxesT = outTensors[info.boxIndex]; // [1,N,4]
+    const classT = outTensors[info.classIndex]; // [1,N,numClasses]
+    const boxesArr = (await boxesT.array())[0];
+    const classArr = (await classT.array())[0];
+    for (let i=0;i<boxesArr.length;i++){
+      const [cx,cy,w,h] = boxesArr[i];
+      const probs = classArr[i];
+      // choose best class
+      let bestIdx=0, best=probs[0];
+      for (let c=1;c<probs.length;c++){ if (probs[c] > best){ best = probs[c]; bestIdx=c; } }
+      const sc = Math.max(0, Math.min(1, best));
+      if (sc < scoreThreshold) continue;
+      boxesAbs.push(cxcywhToBoxes([[cx,cy,w,h]], canvas.width, canvas.height)[0]);
+      scores.push(sc);
+      classes.push(bestIdx);
+    }
+
+  } else if (info.mode === "single2_flat"){
+    const t = outTensors[info.tensorIndex]; // [1, total]
+    const arr = (await t.array())[0];
+    const N = info.numPreds; const C = info.channels;
+    for (let i=0;i<N;i++){
+      const offset = i*C;
+      const cx = arr[offset+0], cy = arr[offset+1], w=arr[offset+2], h=arr[offset+3];
+      const obj = arr[offset+4];
+      const class_probs = arr.slice(offset+5, offset+5+classNames.length);
+      let bestIdx=0, bestP = class_probs[0];
+      for (let c=1;c<class_probs.length;c++) if (class_probs[c]>bestP){ bestP=class_probs[c]; bestIdx=c; }
+      const sc = Math.max(0, Math.min(1, obj * bestP));
+      if (sc < scoreThreshold) continue;
+      boxesAbs.push(cxcywhToBoxes([[cx,cy,w,h]], canvas.width, canvas.height)[0]);
+      scores.push(sc);
+      classes.push(bestIdx);
+    }
+
+  } else {
+    // fallback: try first tensor flattening to [1,N,C] if possible
+    const t = outTensors[info.tensorIndex];
+    const s = spec[info.tensorIndex].shape;
+    console.warn("Unknown output layout, attempting generic decode for tensor index", info.tensorIndex, "shape", s);
+    try {
+      const arr = await t.array();
+      // attempt to find 4 numbers repeated -> search for pattern
+      // naive attempt: if arr[0].length % (4+classNames.length+1) ==0 then decode
+      if (Array.isArray(arr[0])){
+        // already 2D: treat as [1,N,C]
+        const preds = arr[0];
+        for (let i=0;i<preds.length;i++){
+          const row = preds[i];
+          if (row.length >= 5 + classNames.length){
+            const cx=row[0], cy=row[1], w=row[2], h=row[3];
+            const obj=row[4]; const class_probs = row.slice(5,5+classNames.length);
+            let bestIdx=0, bestP=class_probs[0];
+            for (let c=1;c<class_probs.length;c++) if (class_probs[c]>bestP){ bestP=class_probs[c]; bestIdx=c; }
+            const sc = obj * bestP;
+            if (sc < scoreThreshold) continue;
+            boxesAbs.push(cxcywhToBoxes([[cx,cy,w,h]], canvas.width, canvas.height)[0]);
+            scores.push(sc);
+            classes.push(bestIdx);
+          }
+        }
+      }
+    } catch(e){
+      console.error("Fallback decode failed", e);
+    }
+  }
+
+  // free tensors
+  disposeAll(outTensors);
+  return {boxes: boxesAbs, scores, classes};
+}
+
+// ------------- RUN DETECTION (camera frames) -------------
+async function runLoop(){
+  if (!model) return;
+  if (!video.srcObject) return;
+  running = true;
+  modelStatus.innerText = "running";
+  while(running){
+    // capture frame
+    const imgTensor = tf.tidy(()=> {
+      return tf.browser.fromPixels(video)
+        .resizeBilinear([INPUT_SIZE, INPUT_SIZE])
+        .toFloat()
+        .div(255.0)
+        .expandDims(0);
     });
 
-    video.srcObject = stream;
-
-    video.onloadedmetadata = () => {
-        video.play();
-        runDetection();
-    };
-
-if (!model) {
-    model = await tf.loadGraphModel(modelUrl);
-    console.log("Model Loaded", model);
-
-    // Tampilkan output node
-    console.log("OUTPUT NODES:", model.outputNodes);
-
-    // Bikin input palsu (dummy)
-    const dummy = tf.zeros([1, 640, 640, 3]);
-
-    // Jalankan model
-    const outputs = await model.executeAsync(dummy);
-
-    console.log("RAW MODEL OUTPUT:", outputs);
-
-    if (Array.isArray(outputs)) {
-        outputs.forEach((t, i) => {
-            console.log("OUT["+i+"] shape:", t.shape);
-        });
-    } else {
-        console.log("OUTPUT shape:", outputs.shape);
+    // model execute
+    let rawOut;
+    try{
+      rawOut = await model.executeAsync(imgTensor);
+    }catch(err){
+      // fallback
+      rawOut = await model.predict(imgTensor);
+    } finally {
+      imgTensor.dispose();
     }
+
+    // decode predictions using runtime spec (we assembled earlier)
+    const {boxes, scores, classes} = await decodePredictions(rawOut, outputSpec || [{shape: [1,1,1]}]);
+
+    // If none -> clear canvas
+    if (boxes.length === 0){
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      await tf.nextFrame();
+      continue;
+    }
+
+    // Prepare for NMS: tf.image.nonMaxSuppression needs boxes as [ymin,xmin,ymax,xmax]
+    const boxesForNMS = boxes.map(b => [b[1], b[0], b[3], b[2]]);
+    const scoresTensor = tf.tensor1d(scores);
+    const boxesTensor = tf.tensor2d(boxesForNMS);
+    // run NMS (return indices)
+    const selectedIdx = await tf.image.nonMaxSuppressionAsync(
+      boxesTensor, scoresTensor, maxDetections, iouThreshold, scoreThreshold
+    );
+    const sel = await selectedIdx.array();
+    const finalBoxes = [], finalScores = [], finalClasses = [];
+    for (let i=0;i<sel.length;i++){
+      const idx = sel[i];
+      finalBoxes.push(boxes[idx]);
+      finalScores.push(scores[idx]);
+      finalClasses.push(classes[idx]);
+    }
+    // dispose
+    boxesTensor.dispose(); scoresTensor.dispose(); selectedIdx.dispose();
+
+    // draw
+    drawBoxes(finalBoxes, finalScores, finalClasses);
+
+    await tf.nextFrame();
+  }
+  modelStatus.innerText = "stopped";
 }
 
-
-
-/* ===========================
-   3. Detection Loop
-   =========================== */
-async function runDetection() {
-    const video = document.getElementById("video");
-    const canvas = document.getElementById("canvas");
-    const ctx = canvas.getContext("2d");
-
-    const detectFrame = async () => {
-        if (!model) return requestAnimationFrame(detectFrame);
-
-        const input = tf.tidy(() => {
-            return tf.browser.fromPixels(video)
-                .resizeBilinear([640, 640])
-                .expandDims(0)
-                .div(255.0);
-        });
-
-        let predictions = await model.executeAsync(input);
-
-        const boxes = predictions[0].arraySync()[0];
-        const scores = predictions[1].arraySync()[0];
-        const labels = predictions[2].arraySync()[0];
-
-        tf.dispose(predictions);
-        tf.dispose(input);
-
-        // Draw video frame
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        // Draw detection
-        for (let i = 0; i < scores.length; i++) {
-            if (scores[i] < threshold) continue; 
-
-            const [ymin, xmin, ymax, xmax] = boxes[i];
-
-            const x = xmin * canvas.width;
-            const y = ymin * canvas.height;
-            const width = (xmax - xmin) * canvas.width;
-            const height = (ymax - ymin) * canvas.height;
-
-            const className = classNames[labels[i]];
-
-            ctx.strokeStyle = "red";
-            ctx.lineWidth = 3;
-            ctx.strokeRect(x, y, width, height);
-
-            ctx.fillStyle = "red";
-            ctx.font = "18px Arial";
-            ctx.fillText(className + " (" + (scores[i] * 100).toFixed(1) + "%)", x + 5, y + 20);
-        }
-
-        requestAnimationFrame(detectFrame);
-    };
-
-    detectFrame();
+// ------------- CAMERA CONTROL -------------
+async function startCamera(){
+  if (stream){
+    // stop previous
+    stream.getTracks().forEach(t=>t.stop());
+    stream = null;
+  }
+  const facingMode = cameraSelect.value;
+  try{
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode }, audio: false });
+  }catch(e){
+    // fallback without facingmode
+    stream = await navigator.mediaDevices.getUserMedia({ video: true, audio:false });
+  }
+  video.srcObject = stream;
+  await video.play();
+  canvas.width = video.videoWidth || 640;
+  canvas.height = video.videoHeight || 480;
+  // adjust overlay dims to 640x480 for model scale mapping (we assume video displayed 640x480)
+  canvas.width = 640; canvas.height = 480;
+  // ensure model loaded
+  if (!model){
+    try{
+      const spec = await loadModelAndInspect();
+      console.log("Model output spec:", spec);
+    }catch(err){
+      console.error("Model load/inspect failed:", err);
+      modelStatus.innerText = "load failed (see console)";
+      return;
+    }
+  }
+  // start detection loop
+  runLoop();
 }
+
+// ------------- START BUTTON -------------
+startBtn.onclick = async ()=>{
+  // set thresholds
+  scoreThreshold = thSlider.value/100;
+  maxDetections = parseInt(maxDetInput.value) || 50;
+  if (!model){
+    modelStatus.innerText = "loading model...";
+    try{
+      await loadModelAndInspect();
+    }catch(err){
+      console.error("Load model failed:", err);
+      modelStatus.innerText = "load failed (console)";
+      return;
+    }
+  }
+  startCamera();
+};
+
+// try preload model in background (non-blocking)
+try{
+  loadModelAndInspect().then(spec=>{
+    console.log("Background model inspect done:", spec);
+  }).catch(e=>console.log("Background model inspect failed (ok to ignore):", e));
+}catch(e){ console.warn(e); }
+
+})(); // IIFE
 </script>
-
 </body>
 </html>
