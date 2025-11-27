@@ -10,7 +10,7 @@
 <style>
     body {
         font-family: Arial, sans-serif;
-        background: #f7f7f7;
+        background: #f2f2f2;
         margin: 0;
         padding: 20px;
         text-align: center;
@@ -38,9 +38,9 @@
         margin-bottom: 10px;
     }
 
-    button {
+    button, select {
         padding: 10px 20px;
-        margin-top: 15px;
+        margin: 10px;
         border: none;
         background: #007bff;
         color: white;
@@ -49,8 +49,17 @@
         cursor: pointer;
     }
 
-    button:hover {
+    button:hover, select:hover {
         background: #0056b3;
+    }
+
+    #thresholdBox {
+        margin-top: 10px;
+        font-size: 18px;
+    }
+
+    input[type="range"] {
+        width: 200px;
     }
 </style>
 </head>
@@ -58,12 +67,24 @@
 
 <h2>Fruit Detector - TensorFlow.js</h2>
 
+<!-- Camera options -->
+<select id="cameraSelect">
+    <option value="environment">📷 Back Camera</option>
+    <option value="user">🤳 Front Camera</option>
+</select>
+
+<button onclick="startCamera()">Start Camera</button>
+
+<div id="thresholdBox">
+    Threshold: <span id="thVal">50</span>%  
+    <br>
+    <input type="range" id="threshold" min="10" max="100" value="50" oninput="updateThreshold()">
+</div>
+
 <div id="container">
     <video id="video" autoplay playsinline></video>
     <canvas id="canvas" width="640" height="480"></canvas>
 </div>
-
-<button onclick="startCamera()">Start Camera</button>
 
 <script>
 /* ===========================
@@ -73,21 +94,32 @@
 const modelUrl = "https://vkduvjyfrrjlckkk.public.blob.vercel-storage.com/model.json";
 
 let model;
+let threshold = 0.5;
 
-// Ambil class names dari metadata Anda
+// Class names from your metadata.yaml
 const classNames = [
     "Alpukat","Anggur","Apel","Apel Hijau","Jeruk","Lemon","Mangga",
     "Melon","Nanas","Pepaya","Pir","Pisang","Rambutan","Salak",
     "Semangka","Stroberi"
 ];
 
+function updateThreshold() {
+    const val = document.getElementById("threshold").value;
+    threshold = val / 100;
+    document.getElementById("thVal").innerText = val;
+}
 
 /* ===========================
-   2. Start Camera
+   2. Start Camera (front/back)
    =========================== */
 async function startCamera() {
     const video = document.getElementById("video");
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+    const cameraMode = document.getElementById("cameraSelect").value;
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: cameraMode }
+    });
+
     video.srcObject = stream;
 
     video.onloadedmetadata = () => {
@@ -97,7 +129,7 @@ async function startCamera() {
 
     if (!model) {
         model = await tf.loadGraphModel(modelUrl);
-        console.log("Model Loaded !");
+        console.log("Model Loaded");
     }
 }
 
@@ -113,7 +145,6 @@ async function runDetection() {
     const detectFrame = async () => {
         if (!model) return requestAnimationFrame(detectFrame);
 
-        // Preprocess
         const input = tf.tidy(() => {
             return tf.browser.fromPixels(video)
                 .resizeBilinear([640, 640])
@@ -121,23 +152,22 @@ async function runDetection() {
                 .div(255.0);
         });
 
-        // Predict
         let predictions = await model.executeAsync(input);
 
-        const boxes = predictions[0].arraySync()[0];  // [N,4]
-        const scores = predictions[1].arraySync()[0]; // [N]
-        const labels = predictions[2].arraySync()[0]; // [N]
+        const boxes = predictions[0].arraySync()[0];
+        const scores = predictions[1].arraySync()[0];
+        const labels = predictions[2].arraySync()[0];
 
         tf.dispose(predictions);
         tf.dispose(input);
 
-        // Draw Video
+        // Draw video frame
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        // Draw Detection Results
+        // Draw detection
         for (let i = 0; i < scores.length; i++) {
-            if (scores[i] < 0.5) continue; // threshold
+            if (scores[i] < threshold) continue; 
 
             const [ymin, xmin, ymax, xmax] = boxes[i];
 
@@ -148,15 +178,13 @@ async function runDetection() {
 
             const className = classNames[labels[i]];
 
-            // Box
             ctx.strokeStyle = "red";
             ctx.lineWidth = 3;
             ctx.strokeRect(x, y, width, height);
 
-            // Label box
             ctx.fillStyle = "red";
             ctx.font = "18px Arial";
-            ctx.fillText(className + " (" + (scores[i]*100).toFixed(1) + "%)", x + 5, y + 20);
+            ctx.fillText(className + " (" + (scores[i] * 100).toFixed(1) + "%)", x + 5, y + 20);
         }
 
         requestAnimationFrame(detectFrame);
@@ -164,7 +192,7 @@ async function runDetection() {
 
     detectFrame();
 }
-
 </script>
+
 </body>
 </html>
