@@ -127,11 +127,30 @@ async function startCamera() {
         runDetection();
     };
 
-    if (!model) {
-        model = await tf.loadGraphModel(modelUrl);
-        console.log("Model Loaded");
+if (!model) {
+    model = await tf.loadGraphModel(modelUrl);
+    console.log("Model Loaded", model);
+
+    // Tampilkan output node
+    console.log("OUTPUT NODES:", model.outputNodes);
+
+    // Bikin input palsu (dummy)
+    const dummy = tf.zeros([1, 640, 640, 3]);
+
+    // Jalankan model
+    const outputs = await model.executeAsync(dummy);
+
+    console.log("RAW MODEL OUTPUT:", outputs);
+
+    if (Array.isArray(outputs)) {
+        outputs.forEach((t, i) => {
+            console.log("OUT["+i+"] shape:", t.shape);
+        });
+    } else {
+        console.log("OUTPUT shape:", outputs.shape);
     }
 }
+
 
 
 /* ===========================
