@@ -2,41 +2,205 @@
 <html lang="id">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>YOLOv8 Fruit Detection TF.js</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>AI Fruit Detector Pro</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
     <style>
-        body { font-family: 'Segoe UI', sans-serif; background: #222; color: white; text-align: center; margin: 0; padding: 20px; }
-        h1 { margin-bottom: 10px; }
-        .container { position: relative; display: inline-block; box-shadow: 0 0 20px rgba(0,0,0,0.5); border-radius: 12px; overflow: hidden; }
-        video { display: block; width: 640px; height: 480px; object-fit: cover; }
-        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
-        #status { font-size: 1.2em; margin-bottom: 20px; color: #00ffcc; }
-        .controls { margin-top: 15px; }
+        :root {
+            --primary: #00ffcc;
+            --bg: #1a1a1a;
+            --panel: rgba(255, 255, 255, 0.1);
+        }
+
+        body {
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: white;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden; /* Mencegah scroll saat fullscreen */
+        }
+
+        /* Header */
+        header {
+            padding: 15px;
+            text-align: center;
+            background: linear-gradient(180deg, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0) 100%);
+            position: absolute;
+            top: 0;
+            width: 100%;
+            z-index: 10;
+        }
+
+        h1 { margin: 0; font-size: 1.2rem; text-transform: uppercase; letter-spacing: 2px; text-shadow: 0 0 10px var(--primary); }
+        #status { font-size: 0.8rem; color: #ccc; margin-top: 5px; }
+
+        /* Main Camera Area */
+        .camera-container {
+            flex: 1;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #000;
+        }
+
+        video {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: cover; /* Fullscreen cover */
+        }
+
+        canvas {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        /* Mirror effect for front camera only */
+        .mirror { transform: scaleX(-1); }
+
+        /* Floating HUD Controls */
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 90%;
+            max-width: 500px;
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 15px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            z-index: 20;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+        }
+
+        .control-group {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+
+        .control-group:last-child { margin-bottom: 0; }
+
+        label { font-size: 0.9rem; font-weight: 600; color: #eee; }
+
+        /* Styling Inputs */
+        select {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid var(--primary);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 8px;
+            outline: none;
+            font-size: 0.9rem;
+            width: 60%;
+        }
+
+        /* Custom Slider */
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 50%;
+            background: transparent;
+        }
+        
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 16px;
+            width: 16px;
+            border-radius: 50%;
+            background: var(--primary);
+            cursor: pointer;
+            margin-top: -6px;
+            box-shadow: 0 0 10px var(--primary);
+        }
+
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 4px;
+            cursor: pointer;
+            background: rgba(255, 255, 255, 0.3);
+            border-radius: 2px;
+        }
+
+        #conf-value {
+            font-family: monospace;
+            color: var(--primary);
+            width: 35px;
+            text-align: right;
+        }
+
+        /* Loading Overlay */
+        #loader {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: #1a1a1a;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 999;
+            transition: opacity 0.5s;
+        }
+        .spinner {
+            width: 40px; height: 40px;
+            border: 4px solid rgba(255,255,255,0.1);
+            border-top: 4px solid var(--primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 15px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
     </style>
 </head>
 <body>
 
-    <h1>Deteksi Buah Realtime (YOLOv8)</h1>
-    <div id="status">Menyiapkan TF.js...</div>
+    <div id="loader">
+        <div class="spinner"></div>
+        <div id="loading-text">Memuat AI Model...</div>
+    </div>
 
-    <div class="container">
+    <header>
+        <h1>Fruit Scanner AI</h1>
+        <div id="status">Menginisialisasi...</div>
+    </header>
+
+    <div class="camera-container">
         <video id="webcam" autoplay playsinline muted></video>
         <canvas id="canvas"></canvas>
     </div>
 
     <div class="controls">
-        <p>Deteksi: 16 Kelas | Threshold: 25%</p>
+        <div class="control-group">
+            <label for="camera-select">Kamera</label>
+            <select id="camera-select">
+                <option value="" disabled selected>Mencari kamera...</option>
+            </select>
+        </div>
+
+        <div class="control-group">
+            <label for="conf-slider">Sensitivitas</label>
+            <input type="range" id="conf-slider" min="0.1" max="1.0" step="0.05" value="0.25">
+            <span id="conf-value">25%</span>
+        </div>
     </div>
 
     <script>
-        // --- KONFIGURASI USER ---
-        const MODEL_URL = 'https://vkduvjyfrrjlckkk.public.blob.vercel-storage.com/model.json';
-        const CONF_THRESHOLD = 0.25; // Threshold rendah (25%)
-        const IOU_THRESHOLD = 0.45;  // Mencegah kotak tumpang tindih
+        // --- KONFIGURASI ---
+        const MODEL_URL = 'model.json'; // Pastikan path ini benar
+        const IOU_THRESHOLD = 0.45;
         
-        // DAFTAR NAMA KELAS (Wajib diisi sesuai urutan training Anda!)
-        // Model Anda memiliki 16 kelas (Output channel 20 - 4 coord = 16)
+        // CLASS NAMES (16 Kelas)
         const CLASS_NAMES = [
             "Alpukat", "Anggur", "Apel", "Apel Hijau", 
             "Jeruk", "Lemon", "Mangga", "Melon",
@@ -44,152 +208,260 @@
             "Rambutan", "Salak", "Semangka", "Stroberi"
         ]; 
 
+        // Variables
         let model;
+        let currentStream;
+        let CONF_THRESHOLD = 0.25;
+        let isDetecting = false;
+
+        // Elements
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
         const statusDiv = document.getElementById('status');
+        const cameraSelect = document.getElementById('camera-select');
+        const confSlider = document.getElementById('conf-slider');
+        const confValue = document.getElementById('conf-value');
+        const loader = document.getElementById('loader');
 
-        // Warna random untuk setiap kelas
+        // Colors
         const colors = CLASS_NAMES.map(() => '#' + Math.floor(Math.random()*16777215).toString(16));
 
-        async function setupCamera() {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: { width: 640, height: 480 },
-                audio: false
-            });
-            video.srcObject = stream;
-            return new Promise(resolve => {
-                video.onloadedmetadata = () => {
-                    canvas.width = video.videoWidth;
-                    canvas.height = video.videoHeight;
-                    resolve();
-                };
-            });
+        // --- 1. SETUP UI HANDLERS ---
+        
+        // Handle Slider Change
+        confSlider.addEventListener('input', (e) => {
+            CONF_THRESHOLD = parseFloat(e.target.value);
+            confValue.innerText = Math.round(CONF_THRESHOLD * 100) + '%';
+        });
+
+        // Handle Camera Change
+        cameraSelect.addEventListener('change', (e) => {
+            setupCamera(e.target.value);
+        });
+
+        // --- 2. CAMERA FUNCTIONS ---
+
+        async function getCameras() {
+            try {
+                // Minta izin dulu agar label kamera terbaca
+                await navigator.mediaDevices.getUserMedia({ video: true });
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+
+                cameraSelect.innerHTML = ""; // Bersihkan opsi lama
+                
+                videoDevices.forEach((device, index) => {
+                    const option = document.createElement('option');
+                    option.value = device.deviceId;
+                    // Beri nama user-friendly
+                    option.text = device.label || `Kamera ${index + 1}`;
+                    cameraSelect.appendChild(option);
+                });
+
+                return videoDevices.length > 0 ? videoDevices[0].deviceId : null;
+
+            } catch (error) {
+                console.error("Gagal akses kamera:", error);
+                statusDiv.innerText = "Izin kamera ditolak.";
+            }
         }
 
-        async function loadModel() {
-            statusDiv.innerText = "Memuat Model (sedikit lama)...";
+        async function setupCamera(deviceId) {
+            // Stop stream sebelumnya jika ada
+            if (currentStream) {
+                currentStream.getTracks().forEach(track => track.stop());
+            }
+
+            const constraints = {
+                video: {
+                    deviceId: deviceId ? { exact: deviceId } : undefined,
+                    width: { ideal: 640 }, // Minta resolusi ideal, tapi browser boleh ubah
+                    height: { ideal: 480 }
+                },
+                audio: false
+            };
+
             try {
-                // Memuat model graph
+                currentStream = await navigator.mediaDevices.getUserMedia(constraints);
+                video.srcObject = currentStream;
+
+                return new Promise(resolve => {
+                    video.onloadedmetadata = () => {
+                        // Atur ukuran canvas agar sama persis dengan video yang dirender
+                        canvas.width = video.videoWidth;
+                        canvas.height = video.videoHeight;
+                        
+                        // Cek apakah kamera depan (biasanya label mengandung 'front')
+                        const track = currentStream.getVideoTracks()[0];
+                        const settings = track.getSettings();
+                        // Mirror efek jika kamera depan (user facing)
+                        if (settings.facingMode === 'user') {
+                            video.classList.add('mirror');
+                            canvas.classList.add('mirror');
+                        } else {
+                            video.classList.remove('mirror');
+                            canvas.classList.remove('mirror');
+                        }
+
+                        resolve();
+                    };
+                });
+            } catch (err) {
+                alert("Gagal membuka kamera: " + err.message);
+            }
+        }
+
+        // --- 3. MODEL & DETECTION ---
+
+        async function init() {
+            try {
+                // Aktifkan WebGL
+                await tf.setBackend('webgl');
+                
+                // Load Model
                 model = await tf.loadGraphModel(MODEL_URL);
                 
-                // Warmup model (mempercepat inferensi pertama)
+                // Warmup
                 const dummy = tf.zeros([1, 640, 640, 3]);
                 await model.executeAsync(dummy);
                 tf.dispose(dummy);
 
-                statusDiv.innerText = "Model Siap! Mendeteksi...";
+                // Setup Kamera awal
+                const firstCameraId = await getCameras();
+                if (firstCameraId) {
+                    await setupCamera(firstCameraId);
+                } else {
+                    await setupCamera(); // Default
+                }
+                
+                // Sembunyikan Loading
+                loader.style.opacity = '0';
+                setTimeout(() => loader.remove(), 500);
+                
+                statusDiv.innerText = "Siap! Arahkan ke buah.";
                 detectFrame();
+
             } catch (err) {
                 console.error(err);
-                statusDiv.innerText = "Error: Cek console (F12). Pastikan file model lengkap.";
+                document.getElementById('loading-text').innerText = "Gagal memuat Model. Cek Console.";
             }
         }
 
         async function detectFrame() {
-            if (!model) return;
+            if (video.readyState < 2 || !model) {
+                requestAnimationFrame(detectFrame);
+                return;
+            }
 
-            // 1. Preprocessing Input (Resize ke 640x640 & Normalisasi 0-1)
-            const inputTensor = tf.tidy(() => {
+            // Mencegah memory leak / lag dengan tf.tidy
+            const resData = await tf.tidy(() => {
                 const img = tf.browser.fromPixels(video);
-                return tf.image.resizeBilinear(img, [640, 640])
-                    .div(255.0) // Normalisasi float 0-1
-                    .expandDims(0); // Tambah batch dimension [1, 640, 640, 3]
+                // Resize wajib ke 640x640 sesuai input model YOLOv8
+                const resized = tf.image.resizeBilinear(img, [640, 640])
+                    .div(255.0)
+                    .expandDims(0);
+                return model.executeAsync(resized);
+            }); // Ini mengembalikan Promise Tensor, jadi harus await di luar tidy atau cara lain
+
+            // Karena executeAsync di dalam tidy kadang tricky, kita proses manual:
+            // Cara yang lebih aman untuk loop async:
+            
+            const inputTensor = tf.tidy(() => {
+                 return tf.image.resizeBilinear(tf.browser.fromPixels(video), [640, 640])
+                    .div(255.0).expandDims(0);
             });
 
             try {
                 const res = await model.executeAsync(inputTensor);
                 
-                // 2. Post-Processing YOLOv8 Output
-                // Output shape model Anda: [1, 20, 8400]
-                // Kita perlu transpose menjadi [1, 8400, 20] agar mudah diproses
-                const transRes = res.transpose([0, 2, 1]); 
+                // Transpose [1, 20, 8400] -> [1, 8400, 20]
+                const transRes = res.transpose([0, 2, 1]);
+                
                 const boxes = tf.tidy(() => {
-                    const w = transRes.slice([0, 0, 2], [-1, -1, 1]); // Width
-                    const h = transRes.slice([0, 0, 3], [-1, -1, 1]); // Height
-                    const x = transRes.slice([0, 0, 0], [-1, -1, 1]); // Center X
-                    const y = transRes.slice([0, 0, 1], [-1, -1, 1]); // Center Y
+                    const w = transRes.slice([0, 0, 2], [-1, -1, 1]);
+                    const h = transRes.slice([0, 0, 3], [-1, -1, 1]);
+                    const x = transRes.slice([0, 0, 0], [-1, -1, 1]);
+                    const y = transRes.slice([0, 0, 1], [-1, -1, 1]);
                     
-                    // Convert [cx, cy, w, h] -> [y1, x1, y2, x2] untuk NMS
                     const y1 = y.sub(h.div(2));
                     const x1 = x.sub(w.div(2));
                     const y2 = y.add(h.div(2));
                     const x2 = x.add(w.div(2));
-                    
-                    return tf.concat([y1, x1, y2, x2], 2).squeeze(0); // [8400, 4]
+                    return tf.concat([y1, x1, y2, x2], 2).squeeze(0);
                 });
 
                 const [scores, classes] = tf.tidy(() => {
-                    // Ambil raw scores dari index 4 sampai akhir (16 kelas)
-                    const rawScores = transRes.slice([0, 0, 4], [-1, -1, 16]).squeeze(0); // [8400, 16]
+                    const rawScores = transRes.slice([0, 0, 4], [-1, -1, 16]).squeeze(0);
                     return [rawScores.max(1), rawScores.argMax(1)];
                 });
 
-                // 3. Non-Maximum Suppression (NMS)
-                // Menyaring ribuan kotak menjadi deteksi unik
                 const nms = await tf.image.nonMaxSuppressionAsync(boxes, scores, 50, IOU_THRESHOLD, CONF_THRESHOLD);
-                
-                const detIndices = nms.dataSync(); // Index kotak hasil deteksi
-                
-                // Ambil data untuk digambar
-                const boxesData = boxes.dataSync();
-                const scoresData = scores.dataSync();
-                const classesData = classes.dataSync();
+                const detIndices = nms.dataSync(); // Ambil data ke CPU
 
-                renderPredictions(detIndices, boxesData, scoresData, classesData);
+                // Render
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                // Scale factor: dari 640 (model) ke Ukuran Video (Canvas)
+                const scaleX = canvas.width / 640;
+                const scaleY = canvas.height / 640;
+                
+                // Cache data sync untuk loop cepat
+                const boxesArr = boxes.dataSync();
+                const scoresArr = scores.dataSync();
+                const classesArr = classes.dataSync();
 
-                // Bersihkan memori tensor
+                for (let i = 0; i < detIndices.length; i++) {
+                    const idx = detIndices[i];
+                    const score = scoresArr[idx];
+                    const labelIdx = classesArr[idx];
+                    const label = CLASS_NAMES[labelIdx] || 'Unknown';
+                    const color = colors[labelIdx] || '#00ffcc';
+
+                    const y1 = boxesArr[idx * 4] * scaleY;
+                    const x1 = boxesArr[idx * 4 + 1] * scaleX;
+                    const y2 = boxesArr[idx * 4 + 2] * scaleY;
+                    const x2 = boxesArr[idx * 4 + 3] * scaleX;
+
+                    const width = x2 - x1;
+                    const height = y2 - y1;
+
+                    // Gambar Kotak Futuristik
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 3;
+                    
+                    // Efek shadow neon
+                    ctx.shadowColor = color;
+                    ctx.shadowBlur = 10;
+                    ctx.strokeRect(x1, y1, width, height);
+                    ctx.shadowBlur = 0; // Reset shadow
+
+                    // Background Label
+                    ctx.fillStyle = color;
+                    const text = `${label} ${(score*100).toFixed(0)}%`;
+                    const textW = ctx.measureText(text).width;
+                    ctx.fillRect(x1, y1 - 25, textW + 10, 25);
+
+                    // Teks Label
+                    ctx.fillStyle = '#000'; // Text hitam di atas warna cerah
+                    ctx.font = 'bold 16px Segoe UI';
+                    ctx.fillText(text, x1 + 5, y1 - 7);
+                }
+
                 tf.dispose([res, transRes, boxes, scores, classes, nms]);
-            } catch (e) {
+
+            } catch(e) {
                 console.error(e);
-            }
-            
-            tf.dispose(inputTensor);
-            requestAnimationFrame(detectFrame);
-        }
-
-        function renderPredictions(indices, boxes, scores, classes) {
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            // Faktor skala (Model 640x640 -> Ukuran Asli Canvas)
-            const scaleX = canvas.width / 640;
-            const scaleY = canvas.height / 640;
-
-            for (let i = 0; i < indices.length; i++) {
-                const idx = indices[i];
-                const score = scores[idx];
-                const labelIdx = classes[idx];
-                const label = CLASS_NAMES[labelIdx] || `Class ${labelIdx}`;
-                const color = colors[labelIdx] || 'red';
-
-                // Koordinat box [y1, x1, y2, x2] dari TFJS
-                const y1 = boxes[idx * 4] * scaleY;
-                const x1 = boxes[idx * 4 + 1] * scaleX;
-                const y2 = boxes[idx * 4 + 2] * scaleY;
-                const x2 = boxes[idx * 4 + 3] * scaleX;
-
-                const width = x2 - x1;
-                const height = y2 - y1;
-
-                // Gambar Kotak
-                ctx.strokeStyle = color;
-                ctx.lineWidth = 3;
-                ctx.strokeRect(x1, y1, width, height);
-
-                // Gambar Label
-                ctx.fillStyle = color;
-                ctx.font = '16px Arial';
-                const text = `${label} ${(score * 100).toFixed(0)}%`;
-                const textWidth = ctx.measureText(text).width;
-                
-                ctx.fillRect(x1, y1 - 25, textWidth + 10, 25);
-                ctx.fillStyle = '#fff';
-                ctx.fillText(text, x1 + 5, y1 - 7);
+            } finally {
+                tf.dispose(inputTensor);
+                // Loop
+                requestAnimationFrame(detectFrame);
             }
         }
 
-        setupCamera().then(loadModel);
+        // Start
+        init();
+
     </script>
 </body>
 </html>
