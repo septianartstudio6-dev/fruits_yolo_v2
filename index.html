@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Fruit Detection (YOLOv8 TF.js)</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.14.0/dist/tf.min.js"></script>
+    
+    <script>
+        // --- KONFIGURASI MODEL ---
+        // Ganti URL ini dengan URL model TF.js Layer Anda.
+        const MODEL_URL = 'https://vkduvjyfrrjlckkk.public.blob.vercel-storage.com/model.json'; 
+        
+        // Konfigurasi dari metadata.yaml
+        const CLASS_NAMES = [
+            'Alpukat', 'Anggur', 'Apel', 'Apel Hijau', 'Jeruk', 'Lemon',
+            'Mangga', 'Melon', 'Nanas', 'Pepaya', 'Pir', 'Pisang',
+            'Rambutan', 'Salak', 'Semangka', 'Stroberi'
+        ];
+        const INPUT_SIZE = 640;
+        const MAX_DETECTIONS = 20; // Batas deteksi maksimal
+        
+        // Thresholds (serendah mungkin)
+        const IOU_THRESHOLD = 0.4; // IOU (Intersection over Union) untuk NMS
+        const SCORE_THRESHOLD = 0.05; // Batas Skor Deteksi (Confidence/Kepercayaan)
+
+        let model;
+
+        // --- CSS DISATUKAN ---
+        const style = `
+            body {
+                margin: 0;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                font-family: Arial, sans-serif;
+                background-color: #f0f0f0;
+            }
+            #webcam-container {
+                position: relative;
+                width: ${INPUT_SIZE}px;
+                height: ${INPUT_SIZE}px;
+                margin: 20px;
+                border: 2px solid #333;
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+            }
+            #video-feed {
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+                /* Mirroring video, agar seperti cermin */
+                transform: scaleX(-1);
+            }
+            #loading-text {
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                font-size: 1.5em;
+                color: white;
+                background: rgba(0, 0, 0, 0.5);
+                padding: 10px;
+                border-radius: 5px;
+                white-space: nowrap;
+            }
+            .bounding-box {
+                position: absolute;
+                border: 2px solid #10ff70; /* Hijau terang */
+                box-shadow: 0 0 5px rgba(16, 255, 112, 0.5);
+                color: white;
+                z-index: 10;
+            }
+            .label {
+                position: absolute;
+                top: -18px;
+                left: -2px;
+                background-color: #10ff70;
+                color: #333;
+                font-size: 11px;
+                font-weight: bold;
+                padding: 0 4px;
+                border-radius: 2px 2px 0 0;
+                white-space: nowrap;
+            }
+            #status {
+                margin-top: 10px;
+                font-size: 1.1em;
+                font-weight: bold;
+                color: #333;
+            }
+        `;
+    </script>
+    <style>
+        ${style}
+    </style>
+</head>
+<body>
+    <h1>Real-time Fruit Object Detection</h1>
+
+    <div id="webcam-container">
+        <video id="video-feed" autoplay playsinline muted></video>
+        <div id="loading-text">Memuat Model...</div>
+    </div>
+    
+    <div id="status">Status: Memuat...</div>
+
+    <script>
+        const video = document.getElementById('video-feed');
+        const container = document.getElementById('webcam-container');
+        const loadingText = document.getElementById('loading-text');
+        const statusElement = document.getElementById('status');
+        let animationFrameId;
+
+        // --- 1. Fungsi Utama Pemuatan Model dan Kamera ---
+        async function setupWebcam() {
+            try {
+                // Memuat model dari URL
+                model = await tf.loadGraphModel(MODEL_URL);
+                loadingText.textContent = 'Model Berhasil Dimuat. Memulai Kamera...';
+
+                // Memulai kamera
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    'video': { 
+                        facingMode: 'environment', // Coba kamera belakang/utama
+                        width: INPUT_SIZE,
+                        height: INPUT_SIZE 
+                    } 
+                });
+                video.srcObject = stream;
+                
+                // Setelah video siap, mulai deteksi
+                video.onloadeddata = () => {
+                    loadingText.style.display = 'none';
+                    statusElement.textContent = 'Status: Deteksi Aktif';
+                    detectFrame(); 
+                };
+
+            } catch (error) {
+                console.error("Gagal memuat model atau mengakses kamera:", error);
+                loadingText.textContent = `ERROR: Gagal memuat model. Periksa konsol. (${error.message})`;
+                statusElement.textContent = 'Status: Error';
+                cancelAnimationFrame(animationFrameId);
+            }
+        }
+
+        // --- 2. Fungsi Deteksi Per Frame (Loop) ---
+        function detectFrame() {
+            if (!model || !video.srcObject) {
+                animationFrameId = requestAnimationFrame(detectFrame);
+                return;
+            }
+
+            tf.engine().startScope(); // Optimasi memori: Awal scope
+
+            // Preprocessing: Ambil frame, ubah ukuran, normalisasi
+            const inputTensor = tf.tidy(() => {
+                // Ambil frame, ubah ke tensor [H, W, 3]
+                const img = tf.browser.fromVideo(video); 
+                // Ubah ukuran ke 640x640
+                const resized = tf.image.resizeBilinear(img, [INPUT_SIZE, INPUT_SIZE]); 
+                // Normalisasi ke [0, 1] dan tambahkan dimensi batch [1, 640, 640, 3]
+                return resized.div(255.0).expandDims(0); 
+            });
+
+            // Inferensi (Deteksi)
+            let predictions;
+            try {
+                predictions = model.execute(inputTensor);
+            } catch (e) {
+                console.error("Error saat eksekusi model:", e);
+                tf.engine().endScope();
+                animationFrameId = requestAnimationFrame(detectFrame);
+                return;
+            }
+
+            // Pasca-pemrosesan (NMS)
+            const [boxesData, scoresData] = processYoloOutput(predictions);
+
+            tf.dispose(predictions); 
+            tf.dispose(inputTensor); // Buang tensor input
+
+            // Tampilkan Kotak Pembatas (Bounding Boxes)
+            renderBoxes(boxesData, scoresData);
+
+            tf.engine().endScope(); // Optimasi memori: Akhir scope, membuang tensor yang tidak digunakan
+
+            // Lanjutkan loop deteksi
+            animationFrameId = requestAnimationFrame(detectFrame);
+        }
+
+        // --- 3. Fungsi Pasca-Pemrosesan (SANGAT DISEDERHANAKAN & PERLU ADAPTASI) ---
+        function processYoloOutput(outputTensor) {
+             // ASUMSI Sederhana: Output sudah berbentuk [1, N_Boxes, (4 box + N_Classes)] 
+             // Jika model YOLOv8 asli, outputnya seringkali terbalik (1, 84, 8400) dan harus di-transpose/reshape.
+             
+             // Karena format YOLOv8 di TF.js tidak standar, kita ambil output mentah
+             // dan mencoba menerapkan NMS manual.
+             
+             // Transpose: Ubah format (1, 84, 8400) menjadi (1, 8400, 84)
+             let reshapedOutput = tf.tidy(() => outputTensor.transpose([0, 2, 1]).squeeze());
+
+             const [boxesData, scoresData] = [reshapedOutput.arraySync(), reshapedOutput.arraySync()];
+             const allBoxes = [];
+             const allScores = [];
+
+             // Jumlah total prediksi yang mungkin (8400)
+             const numPredictions = reshapedOutput.shape[0];
+             const numClasses = CLASS_NAMES.length;
+
+             for (let i = 0; i < numPredictions; i++) {
+                 // Kotak: x, y, w, h ada di indeks 0-3
+                 const box = boxesData[i].slice(0, 4); 
+                 // Skor kelas dimulai dari indeks 4
+                 const classScores = scoresData[i].slice(4, 4 + numClasses);
+                 
+                 const maxScore = Math.max(...classScores);
+                 const classId = classScores.indexOf(maxScore);
+
+                 if (maxScore >= SCORE_THRESHOLD) {
+                    // Konversi (x, y, w, h) ke format (xmin, ymin, xmax, ymax) untuk NMS
+                    const [x, y, w, h] = box;
+                    const xmin = x - w / 2;
+                    const ymin = y - h / 2;
+                    const xmax = x + w / 2;
+                    const ymax = y + h / 2;
+                    
+                    allBoxes.push([ymin, xmin, ymax, xmax]); // Format TF.js NMS: [ymin, xmin, ymax, xmax]
+                    allScores.push({ score: maxScore, classId: classId });
+                 }
+             }
+
+             tf.dispose(reshapedOutput);
+
+             if (allBoxes.length === 0) {
+                 return [[], []];
+             }
+             
+             // --- Implementasi Non-Max Suppression (NMS) ---
+             const boxTensors = tf.tensor2d(allBoxes);
+             const scoreTensors = tf.tensor1d(allScores.map(s => s.score));
+             
+             // NMS dari TF.js
+             const nmsIndices = tf.image.nonMaxSuppression(
+                 boxTensors,
+                 scoreTensors,
+                 MAX_DETECTIONS, // Max output boxes (20)
+                 IOU_THRESHOLD,
+                 SCORE_THRESHOLD
+             );
+
+             const selectedIndices = nmsIndices.dataSync();
+             tf.dispose([boxTensors, scoreTensors, nmsIndices]);
+
+             const finalBoxes = [];
+             const finalScores = [];
+             
+             // Kumpulkan hasil NMS
+             selectedIndices.forEach(index => {
+                 // Konversi kembali ke format standar [xmin, ymin, xmax, ymax]
+                 const [ymin, xmin, ymax, xmax] = allBoxes[index]; 
+                 finalBoxes.push([xmin, ymin, xmax, ymax]);
+                 finalScores.push(allScores[index]);
+             });
+
+             return [finalBoxes, finalScores];
+        }
+
+        // --- 4. Fungsi Render Bounding Boxes ---
+        function renderBoxes(boxes, scores) {
+            // Bersihkan kotak pembatas lama
+            document.querySelectorAll('.bounding-box').forEach(el => el.remove());
+
+            // Gunakan ukuran container untuk scaling
+            const containerWidth = container.offsetWidth;
+            const containerHeight = container.offsetHeight; 
+            const scaleX = containerWidth / INPUT_SIZE;
+            const scaleY = containerHeight / INPUT_SIZE;
+
+            boxes.forEach((box, index) => {
+                const scoreObj = scores[index];
+                const [xmin, ymin, xmax, ymax] = box;
+
+                // Koordinat relatif terhadap ukuran tampilan (640px)
+                const x = xmin * scaleX;
+                const y = ymin * scaleY;
+                const width = (xmax - xmin) * scaleX;
+                const height = (ymax - ymin) * scaleY;
+
+                const className = CLASS_NAMES[scoreObj.classId];
+                const confidence = (scoreObj.score * 100).toFixed(1);
+
+                // Buat elemen div untuk kotak pembatas
+                const boxDiv = document.createElement('div');
+                boxDiv.classList.add('bounding-box');
+                boxDiv.style.left = `${x}px`;
+                boxDiv.style.top = `${y}px`;
+                boxDiv.style.width = `${width}px`;
+                boxDiv.style.height = `${height}px`;
+
+                // Label teks
+                const labelDiv = document.createElement('div');
+                labelDiv.classList.add('label');
+                labelDiv.textContent = `${className} (${confidence}%)`;
+
+                boxDiv.appendChild(labelDiv);
+                container.appendChild(boxDiv);
+            });
+        }
+
+        // Mulai aplikasi
+        setupWebcam();
+
+    </script>
+</body>
+</html>
