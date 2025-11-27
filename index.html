@@ -1,308 +1,195 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html lang="id">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Fruit Detector — TFJS (YOLOv8) — Final</title>
-<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.19.0/dist/tf.min.js"></script>
-<style>
-  body{font-family:Inter,Arial,Helvetica,sans-serif;background:#f3f4f6;margin:0;padding:18px;text-align:center}
-  h1{margin:6px 0 14px;font-size:20px}
-  #controls{display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap;margin-bottom:12px}
-  select,button,input[type=range]{padding:8px;border-radius:8px;border:1px solid #d1d5db}
-  #container{position:relative;display:inline-block;background:#000;border-radius:10px;overflow:hidden}
-  video{display:block;width:640px;height:480px;object-fit:cover}
-  canvas{position:absolute;left:0;top:0;width:640px;height:480px;pointer-events:none}
-  #status{margin-top:12px;color:#374151}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLOv8 Fruit Detection TF.js</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #222; color: white; text-align: center; margin: 0; padding: 20px; }
+        h1 { margin-bottom: 10px; }
+        .container { position: relative; display: inline-block; box-shadow: 0 0 20px rgba(0,0,0,0.5); border-radius: 12px; overflow: hidden; }
+        video { display: block; width: 640px; height: 480px; object-fit: cover; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        #status { font-size: 1.2em; margin-bottom: 20px; color: #00ffcc; }
+        .controls { margin-top: 15px; }
+    </style>
 </head>
 <body>
-<h1>Fruit Detector — TFJS (YOLOv8)</h1>
 
-<div id="controls">
-  <select id="cameraSelect">
-    <option value="environment">📷 Back camera</option>
-    <option value="user">🤳 Front camera</option>
-  </select>
-  <button id="startBtn">Start Camera</button>
-  <label>Threshold: <span id="thVal">50</span>%</label>
-  <input id="threshold" type="range" min="5" max="95" value="50" />
-  <label>Max det:
-    <input id="maxDet" type="number" min="1" max="200" value="50" style="width:70px;margin-left:6px"/>
-  </label>
-</div>
+    <h1>Deteksi Buah Realtime (YOLOv8)</h1>
+    <div id="status">Menyiapkan TF.js...</div>
 
-<div id="container">
-  <video id="video" autoplay playsinline></video>
-  <canvas id="overlay" width="640" height="480"></canvas>
-</div>
+    <div class="container">
+        <video id="webcam" autoplay playsinline muted></video>
+        <canvas id="canvas"></canvas>
+    </div>
 
-<div id="status">Model: <span id="modelStatus">not loaded</span></div>
+    <div class="controls">
+        <p>Deteksi: 16 Kelas | Threshold: 25%</p>
+    </div>
 
-<script>
-(async ()=>{
+    <script>
+        // --- KONFIGURASI USER ---
+        const MODEL_URL = 'https://vkduvjyfrrjlckkk.public.blob.vercel-storage.com/model.json';
+        const CONF_THRESHOLD = 0.25; // Threshold rendah (25%)
+        const IOU_THRESHOLD = 0.45;  // Mencegah kotak tumpang tindih
+        
+        // DAFTAR NAMA KELAS (Wajib diisi sesuai urutan training Anda!)
+        // Model Anda memiliki 16 kelas (Output channel 20 - 4 coord = 16)
+        const CLASS_NAMES = [
+            "Alpukat", "Anggur", "Apel", "Apel Hijau", 
+            "Jeruk", "Lemon", "Mangga", "Melon",
+            "Nanas", "Pepaya", "Pir", "Pisang",
+            "Rambutan", "Salak", "Semangka", "Stroberi"
+        ]; 
 
-// ---------- CONFIG ----------
-const MODEL_URL = "https://vkduvjyfrrjlckkk.public.blob.vercel-storage.com/model.json";
-const INPUT_SIZE = 640;
-let scoreThreshold = 0.5;
-let iouThreshold = 0.45;
-let maxDetections = 50;
+        let model;
+        const video = document.getElementById('webcam');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const statusDiv = document.getElementById('status');
 
-// class names (from your metadata.yaml)
-const classNames = [
- "Alpukat","Anggur","Apel","Apel Hijau","Jeruk","Lemon","Mangga",
- "Melon","Nanas","Pepaya","Pir","Pisang","Rambutan","Salak",
- "Semangka","Stroberi"
-];
+        // Warna random untuk setiap kelas
+        const colors = CLASS_NAMES.map(() => '#' + Math.floor(Math.random()*16777215).toString(16));
 
-const video = document.getElementById("video");
-const canvas = document.getElementById("overlay");
-const ctx = canvas.getContext("2d");
-const startBtn = document.getElementById("startBtn");
-const cameraSelect = document.getElementById("cameraSelect");
-const thSlider = document.getElementById("threshold");
-const thVal = document.getElementById("thVal");
-const modelStatus = document.getElementById("modelStatus");
-const maxDetInput = document.getElementById("maxDet");
+        async function setupCamera() {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { width: 640, height: 480 },
+                audio: false
+            });
+            video.srcObject = stream;
+            return new Promise(resolve => {
+                video.onloadedmetadata = () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    resolve();
+                };
+            });
+        }
 
-thSlider.oninput = ()=>{ scoreThreshold = thSlider.value/100; thVal.innerText = thSlider.value; };
-maxDetInput.onchange = ()=>{ let v=parseInt(maxDetInput.value)||50; maxDetections = Math.max(1,Math.min(200,v)); };
+        async function loadModel() {
+            statusDiv.innerText = "Memuat Model (sedikit lama)...";
+            try {
+                // Memuat model graph
+                model = await tf.loadGraphModel(MODEL_URL);
+                
+                // Warmup model (mempercepat inferensi pertama)
+                const dummy = tf.zeros([1, 640, 640, 3]);
+                await model.executeAsync(dummy);
+                tf.dispose(dummy);
 
-// state
-let model = null;
-let outputSpec = null; // runtime shapes
-let stream = null;
-let running = false;
+                statusDiv.innerText = "Model Siap! Mendeteksi...";
+                detectFrame();
+            } catch (err) {
+                console.error(err);
+                statusDiv.innerText = "Error: Cek console (F12). Pastikan file model lengkap.";
+            }
+        }
 
-// ---------- util ----------
-function clearCanvas(){ ctx.clearRect(0,0,canvas.width,canvas.height); }
-function drawBoxes(boxes, scores, classes){
-  clearCanvas();
-  ctx.lineWidth = 2;
-  for (let i=0;i<boxes.length;i++){
-    const b = boxes[i];
-    const score = scores[i];
-    const cls = classes[i];
-    ctx.strokeStyle = "rgba(0,180,255,0.95)";
-    ctx.strokeRect(b[0], b[1], b[2]-b[0], b[3]-b[1]);
-    // label bg
-    const label = `${classNames[cls] || cls} ${(score*100).toFixed(1)}%`;
-    ctx.font = "14px Arial";
-    const w = ctx.measureText(label).width + 8;
-    const h = 18;
-    ctx.fillStyle = "rgba(0,180,255,0.95)";
-    ctx.fillRect(b[0]-1, Math.max(0,b[1]-h), w, h);
-    ctx.fillStyle = "#000";
-    ctx.fillText(label, b[0]+4, Math.max(12, b[1]-4));
-  }
-}
+        async function detectFrame() {
+            if (!model) return;
 
-// cx,cy,w,h normalized -> absolute boxes
-function cxcywhToBoxes(arr, width, height){
-  const out = [];
-  for (let i=0;i<arr.length;i++){
-    const [cx,cy,w,h] = arr[i];
-    const x = cx * width;
-    const y = cy * height;
-    const bw = w * width;
-    const bh = h * height;
-    const xmin = Math.max(0, x - bw/2);
-    const ymin = Math.max(0, y - bh/2);
-    const xmax = Math.min(width, x + bw/2);
-    const ymax = Math.min(height, y + bh/2);
-    out.push([xmin,ymin,xmax,ymax]);
-  }
-  return out;
-}
+            // 1. Preprocessing Input (Resize ke 640x640 & Normalisasi 0-1)
+            const inputTensor = tf.tidy(() => {
+                const img = tf.browser.fromPixels(video);
+                return tf.image.resizeBilinear(img, [640, 640])
+                    .div(255.0) // Normalisasi float 0-1
+                    .expandDims(0); // Tambah batch dimension [1, 640, 640, 3]
+            });
 
-// dispose helpers
-function disposeAll(t){
-  if (!t) return;
-  if (Array.isArray(t)) t.forEach(x=>{ try{x.dispose();}catch(e){} });
-  else try{ t.dispose(); } catch(e){}
-}
+            try {
+                const res = await model.executeAsync(inputTensor);
+                
+                // 2. Post-Processing YOLOv8 Output
+                // Output shape model Anda: [1, 20, 8400]
+                // Kita perlu transpose menjadi [1, 8400, 20] agar mudah diproses
+                const transRes = res.transpose([0, 2, 1]); 
+                const boxes = tf.tidy(() => {
+                    const w = transRes.slice([0, 0, 2], [-1, -1, 1]); // Width
+                    const h = transRes.slice([0, 0, 3], [-1, -1, 1]); // Height
+                    const x = transRes.slice([0, 0, 0], [-1, -1, 1]); // Center X
+                    const y = transRes.slice([0, 0, 1], [-1, -1, 1]); // Center Y
+                    
+                    // Convert [cx, cy, w, h] -> [y1, x1, y2, x2] untuk NMS
+                    const y1 = y.sub(h.div(2));
+                    const x1 = x.sub(w.div(2));
+                    const y2 = y.add(h.div(2));
+                    const x2 = x.add(w.div(2));
+                    
+                    return tf.concat([y1, x1, y2, x2], 2).squeeze(0); // [8400, 4]
+                });
 
-// ---------- load & inspect ----------
-async function loadModelInspect(){
-  modelStatus.innerText = "loading...";
-  console.log("Loading model:", MODEL_URL);
-  model = await tf.loadGraphModel(MODEL_URL);
-  modelStatus.innerText = "loaded";
-  console.log("Model:", model);
+                const [scores, classes] = tf.tidy(() => {
+                    // Ambil raw scores dari index 4 sampai akhir (16 kelas)
+                    const rawScores = transRes.slice([0, 0, 4], [-1, -1, 16]).squeeze(0); // [8400, 16]
+                    return [rawScores.max(1), rawScores.argMax(1)];
+                });
 
-  // run dummy to get output shapes
-  const dummy = tf.zeros([1, INPUT_SIZE, INPUT_SIZE, 3]);
-  let outputs = null;
-  try{
-    outputs = await model.executeAsync(dummy);
-  }catch(e){
-    console.warn("executeAsync failed:", e);
-    outputs = model.predict ? model.predict(dummy) : null;
-  } finally {
-    dummy.dispose();
-  }
-  if (!outputs) throw new Error("Model returned no outputs on dummy run.");
+                // 3. Non-Maximum Suppression (NMS)
+                // Menyaring ribuan kotak menjadi deteksi unik
+                const nms = await tf.image.nonMaxSuppressionAsync(boxes, scores, 50, IOU_THRESHOLD, CONF_THRESHOLD);
+                
+                const detIndices = nms.dataSync(); // Index kotak hasil deteksi
+                
+                // Ambil data untuk digambar
+                const boxesData = boxes.dataSync();
+                const scoresData = scores.dataSync();
+                const classesData = classes.dataSync();
 
-  // normalize to array
-  let outArr = [];
-  if (Array.isArray(outputs)) outArr = outputs;
-  else if (outputs instanceof tf.Tensor) outArr = [outputs];
-  else outArr = Object.values(outputs);
+                renderPredictions(detIndices, boxesData, scoresData, classesData);
 
-  console.log("Output tensors count:", outArr.length);
-  outArr.forEach((t,i)=>console.log(`OUT[${i}].shape =`, t.shape, "dtype:", t.dtype));
-  // save spec
-  outputSpec = outArr.map(t=>({shape: t.shape, dtype: t.dtype}));
-  disposeAll(outArr);
-  return outputSpec;
-}
+                // Bersihkan memori tensor
+                tf.dispose([res, transRes, boxes, scores, classes, nms]);
+            } catch (e) {
+                console.error(e);
+            }
+            
+            tf.dispose(inputTensor);
+            requestAnimationFrame(detectFrame);
+        }
 
-// ---------- choose decode strategy ----------
-function chooseStrategy(spec){
-  // spec entries like {shape: [...], dtype: 'float32'}
-  // handle [1, C, N] where C = 4 + numClasses
-  const numC = classNames.length;
-  for (let i=0;i<spec.length;i++){
-    const s = spec[i].shape;
-    if (Array.isArray(s) && s.length===3 && s[0]===1){
-      const a = s[1], b = s[2];
-      if (a === 4 + numC){
-        return {mode:"transposed", idx:i, channels:a, preds:b};
-      }
-      // also accept [1,N,C]
-      if (s[2] >= 5 + numC - 1){ // permissive
-        return {mode:"normal", idx:i, channels:s[2], preds:s[1]};
-      }
-    }
-  }
-  // fallback: first tensor
-  return {mode:"unknown", idx:0};
-}
+        function renderPredictions(indices, boxes, scores, classes) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-// ---------- decode predictions (tailored to your model) ----------
-async function decode(outputs){
-  // normalize
-  let outArr = [];
-  if (Array.isArray(outputs)) outArr = outputs;
-  else if (outputs instanceof tf.Tensor) outArr = [outputs];
-  else outArr = Object.values(outputs);
+            // Faktor skala (Model 640x640 -> Ukuran Asli Canvas)
+            const scaleX = canvas.width / 640;
+            const scaleY = canvas.height / 640;
 
-  // choose strategy
-  const strat = chooseStrategy(outputSpec || [{shape: outArr[0].shape}]);
-  console.log("Chosen strategy:", strat);
+            for (let i = 0; i < indices.length; i++) {
+                const idx = indices[i];
+                const score = scores[idx];
+                const labelIdx = classes[idx];
+                const label = CLASS_NAMES[labelIdx] || `Class ${labelIdx}`;
+                const color = colors[labelIdx] || 'red';
 
-  let tensor = outArr[strat.idx];
-  // if transposed style [1,C,N] -> transpose to [1,N,C]
-  if (strat.mode === "transposed"){
-    tensor = tf.transpose(tensor, [0,2,1]); // [1,N,C]
-  }
+                // Koordinat box [y1, x1, y2, x2] dari TFJS
+                const y1 = boxes[idx * 4] * scaleY;
+                const x1 = boxes[idx * 4 + 1] * scaleX;
+                const y2 = boxes[idx * 4 + 2] * scaleY;
+                const x2 = boxes[idx * 4 + 3] * scaleX;
 
-  // now assume [1,N,C] where C = 4 + numClasses (no objectness)
-  const arr = await tensor.array();
-  const preds = arr[0]; // [N, C]
-  const boxesNorm = []; const scores = []; const classes = [];
-  for (let i=0;i<preds.length;i++){
-    const row = preds[i];
-    if (row.length < 4 + classNames.length) continue;
-    const cx = row[0], cy = row[1], w = row[2], h = row[3];
-    const class_probs = row.slice(4, 4 + classNames.length);
-    // find best class prob
-    let bestIdx = 0, bestP = class_probs[0];
-    for (let c=1;c<class_probs.length;c++){ if (class_probs[c] > bestP){ bestP = class_probs[c]; bestIdx = c; } }
-    const score = bestP; // since no objectness channel
-    if (score < scoreThreshold) continue;
-    boxesNorm.push([cx,cy,w,h]);
-    scores.push(score);
-    classes.push(bestIdx);
-  }
+                const width = x2 - x1;
+                const height = y2 - y1;
 
-  disposeAll(outArr);
-  const boxes = cxcywhToBoxes(boxesNorm, canvas.width, canvas.height);
-  return {boxes, scores, classes};
-}
+                // Gambar Kotak
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 3;
+                ctx.strokeRect(x1, y1, width, height);
 
-// ---------- main loop ----------
-async function runLoop(){
-  if (!model || !video.srcObject) return;
-  running = true;
-  modelStatus.innerText = "running";
-  while (running){
-    // prepare input
-    const input = tf.tidy(()=> tf.browser.fromPixels(video).resizeBilinear([INPUT_SIZE,INPUT_SIZE]).toFloat().div(255.0).expandDims(0));
-    let rawOut;
-    try{
-      rawOut = await model.executeAsync(input);
-    }catch(e){
-      rawOut = model.predict ? model.predict(input) : null;
-    } finally { input.dispose(); }
+                // Gambar Label
+                ctx.fillStyle = color;
+                ctx.font = '16px Arial';
+                const text = `${label} ${(score * 100).toFixed(0)}%`;
+                const textWidth = ctx.measureText(text).width;
+                
+                ctx.fillRect(x1, y1 - 25, textWidth + 10, 25);
+                ctx.fillStyle = '#fff';
+                ctx.fillText(text, x1 + 5, y1 - 7);
+            }
+        }
 
-    if (!rawOut){
-      await tf.nextFrame();
-      continue;
-    }
-
-    const decoded = await decode(rawOut);
-    // NMS expects [ymin,xmin,ymax,xmax]
-    const boxesForNMS = decoded.boxes.map(b=>[b[1], b[0], b[3], b[2]]);
-    if (boxesForNMS.length === 0){
-      clearCanvas();
-      await tf.nextFrame();
-      continue;
-    }
-    const boxesTensor = tf.tensor2d(boxesForNMS);
-    const scoresTensor = tf.tensor1d(decoded.scores);
-    const selected = await tf.image.nonMaxSuppressionAsync(boxesTensor, scoresTensor, maxDetections, iouThreshold, scoreThreshold);
-    const selIdx = await selected.array();
-    const finalBoxes = [], finalScores = [], finalClasses = [];
-    for (let i=0;i<selIdx.length;i++){
-      const idx = selIdx[i];
-      finalBoxes.push(decoded.boxes[idx]);
-      finalScores.push(decoded.scores[idx]);
-      finalClasses.push(decoded.classes[idx]);
-    }
-    boxesTensor.dispose(); scoresTensor.dispose(); selected.dispose();
-    drawBoxes(finalBoxes, finalScores, finalClasses);
-    await tf.nextFrame();
-  }
-  modelStatus.innerText = "stopped";
-}
-
-// ---------- camera ----------
-async function startCamera(){
-  if (stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
-  const facingMode = cameraSelect.value;
-  try{ stream = await navigator.mediaDevices.getUserMedia({video:{facingMode}, audio:false}); }
-  catch(e){ stream = await navigator.mediaDevices.getUserMedia({video:true, audio:false}); }
-  video.srcObject = stream;
-  await video.play();
-  canvas.width = 640; canvas.height = 480;
-  if (!model){
-    try{
-      await loadModelInspect();
-      console.log("Model spec:", outputSpec);
-    }catch(e){
-      console.error("Model load failed", e);
-      modelStatus.innerText = "load failed (see console)";
-      return;
-    }
-  }
-  runLoop();
-}
-
-startBtn.onclick = async ()=>{
-  scoreThreshold = thSlider.value/100;
-  maxDetections = parseInt(maxDetInput.value) || 50;
-  if (!model){
-    try{ await loadModelInspect(); }catch(e){ console.error(e); return; }
-  }
-  startCamera();
-};
-
-// preload model inspect in background
-loadModelInspect().then(s=>console.log("background inspect", s)).catch(e=>console.warn("bg inspect failed", e));
-
-})(); // IIFE
-</script>
+        setupCamera().then(loadModel);
+    </script>
 </body>
 </html>
