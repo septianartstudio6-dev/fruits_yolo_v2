@@ -3,258 +3,228 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>AI Fruit Detector Pro</title>
+    <title>YOLOv8 Fruit Detection</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
     <style>
         :root {
-            --primary: #00ffcc;
-            --bg: #1a1a1a;
+            --primary-color: #00ffcc;
+            --bg-color: #121212;
+            --panel-bg: rgba(255, 255, 255, 0.1);
         }
 
         body {
             font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background-color: var(--bg);
-            color: white;
+            background-color: var(--bg-color);
+            color: #ffffff;
             margin: 0;
             padding: 0;
-            height: 100vh;
             display: flex;
             flex-direction: column;
-            overflow: hidden;
+            align-items: center;
+            min-height: 100vh;
         }
 
-        /* Header */
-        header {
-            padding: 15px;
-            text-align: center;
-            background: linear-gradient(180deg, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0) 100%);
+        h1 { margin: 10px 0; font-size: 1.5rem; text-align: center; }
+
+        /* Main Container for Video & Canvas */
+        .video-container {
+            position: relative;
+            width: 100%;
+            max-width: 640px;
+            aspect-ratio: 4/3; /* Menjaga rasio agar tidak gepeng */
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0,255,204, 0.2);
+        }
+
+        video, canvas {
             position: absolute;
             top: 0;
-            width: 100%;
-            z-index: 10;
-        }
-
-        h1 { margin: 0; font-size: 1.2rem; text-transform: uppercase; letter-spacing: 2px; text-shadow: 0 0 10px var(--primary); }
-        #status { font-size: 0.8rem; color: #ccc; margin-top: 5px; }
-
-        /* Main Camera Area */
-        .camera-container {
-            flex: 1;
-            position: relative;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            background: #000;
-        }
-
-        video {
-            position: absolute;
+            left: 0;
             width: 100%;
             height: 100%;
             object-fit: cover;
         }
+        
+        /* Mirror effect for front camera facing user */
+        video.mirror, canvas.mirror { transform: scaleX(-1); }
 
-        canvas {
-            position: absolute;
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
-
-        /* Mirror effect ONLY for front camera */
-        .mirror { transform: scaleX(-1); }
-
-        /* Floating HUD Controls */
-        .controls {
-            position: absolute;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
+        /* UI Controls Panel */
+        .controls-panel {
             width: 90%;
-            max-width: 500px;
-            background: rgba(0, 0, 0, 0.6);
-            backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
-            border-radius: 20px;
+            max-width: 600px;
+            margin-top: 15px;
             padding: 15px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            z-index: 20;
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            background: var(--panel-bg);
+            border-radius: 12px;
+            backdrop-filter: blur(10px);
         }
 
         .control-group {
+            margin-bottom: 12px;
             display: flex;
-            align-items: center;
             justify-content: space-between;
-            margin-bottom: 10px;
+            align-items: center;
         }
-
         .control-group:last-child { margin-bottom: 0; }
 
-        label { font-size: 0.9rem; font-weight: 600; color: #eee; }
+        label { font-weight: 600; font-size: 0.9rem; }
 
-        /* Styling Inputs */
-        select {
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid var(--primary);
+        select, input[type=range] {
+            padding: 8px;
+            border-radius: 6px;
+            border: 1px solid var(--primary-color);
+            background: rgba(0,0,0,0.3);
             color: white;
-            padding: 8px 12px;
-            border-radius: 8px;
             outline: none;
-            font-size: 0.9rem;
-            width: 60%;
         }
+        select { flex-grow: 1; margin-left: 10px; max-width: 60%; }
+        input[type=range] { flex-grow: 1; margin: 0 10px; }
 
-        /* Custom Slider */
-        input[type=range] {
-            -webkit-appearance: none;
-            width: 50%;
-            background: transparent;
-        }
-        
-        input[type=range]::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            height: 16px;
-            width: 16px;
-            border-radius: 50%;
-            background: var(--primary);
-            cursor: pointer;
-            margin-top: -6px;
-            box-shadow: 0 0 10px var(--primary);
-        }
-
-        input[type=range]::-webkit-slider-runnable-track {
-            width: 100%;
-            height: 4px;
-            cursor: pointer;
-            background: rgba(255, 255, 255, 0.3);
-            border-radius: 2px;
-        }
-
-        #conf-value {
+        #fps-display {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            color: var(--primary-color);
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: bold;
             font-family: monospace;
-            color: var(--primary);
-            width: 35px;
-            text-align: right;
+            z-index: 10;
         }
 
         /* Loading Overlay */
-        #loader {
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: #1a1a1a;
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            z-index: 999;
-            transition: opacity 0.5s;
+        #loading-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9); z-index: 99;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
         }
         .spinner {
-            width: 40px; height: 40px;
-            border: 4px solid rgba(255,255,255,0.1);
-            border-top: 4px solid var(--primary);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin-bottom: 15px;
+            width: 50px; height: 50px; border: 5px solid var(--panel-bg);
+            border-top: 5px solid var(--primary-color); border-radius: 50%;
+            animation: spin 1s linear infinite; margin-bottom: 20px;
         }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-
     </style>
 </head>
 <body>
 
-    <div id="loader">
+    <div id="loading-overlay">
         <div class="spinner"></div>
-        <div id="loading-text">Memuat AI Model...</div>
+        <div id="loading-status">Menyiapkan TensorFlow.js...</div>
     </div>
 
-    <header>
-        <h1>Fruit Scanner AI</h1>
-        <div id="status">Menginisialisasi...</div>
-    </header>
+    <h1>YOLOv8 Fruit Detection</h1>
 
-    <div class="camera-container">
+    <div class="video-container">
+        <div id="fps-display">FPS: 0</div>
         <video id="webcam" autoplay playsinline muted></video>
         <canvas id="canvas"></canvas>
     </div>
 
-    <div class="controls">
+    <div class="controls-panel">
         <div class="control-group">
-            <label for="camera-select">Kamera</label>
+            <label for="camera-select">📷 Kamera:</label>
             <select id="camera-select">
-                <option value="" disabled selected>Mencari kamera...</option>
+                <option value="" disabled selected>Memuat kamera...</option>
             </select>
         </div>
-
+        
         <div class="control-group">
-            <label for="conf-slider">Sensitivitas</label>
-            <input type="range" id="conf-slider" min="0.1" max="1.0" step="0.05" value="0.25">
-            <span id="conf-value">25%</span>
+            <label for="threshold-slider">🎚️ Threshold:</label>
+            <input type="range" id="threshold-slider" min="0.1" max="0.9" step="0.05" value="0.5">
+            <span id="threshold-value">50%</span>
         </div>
     </div>
 
     <script>
-        // --- KONFIGURASI ---
+        // --- KONFIGURASI MODEL ---
         const MODEL_URL = 'https://vkduvjyfrrjlckkk.public.blob.vercel-storage.com/model.json';
-        const IOU_THRESHOLD = 0.15;
+        const MODEL_INPUT_SIZE = 640; // Ukuran input standar YOLOv8
+        const IOU_THRESHOLD = 0.45;   // Untuk NMS (mencegah box tumpang tindih)
         
-        // CLASS NAMES
+        // Nama Kelas dari metadata.yaml Anda (Urutan SANGAT PENTING)
         const CLASS_NAMES = [
-            "Alpukat", "Anggur", "Apel", "Apel Hijau", 
-            "Jeruk", "Lemon", "Mangga", "Melon",
-            "Nanas", "Pepaya", "Pir", "Pisang",
-            "Rambutan", "Salak", "Semangka", "Stroberi"
-        ]; 
+            'Alpukat', 'Anggur', 'Apel', 'Apel Hijau', 'Jeruk', 'Lemon',
+            'Mangga', 'Melon', 'Nanas', 'Pepaya', 'Pir', 'Pisang',
+            'Rambutan', 'Salak', 'Semangka', 'Stroberi'
+        ];
 
-        // Variables
+        // --- VARIABEL GLOBAL ---
         let model;
         let currentStream;
-        let CONF_THRESHOLD = 0.50; // Default Sensitivitas
+        let detectionThreshold = 0.5; // Default 50%
         let isDetecting = false;
-
-        // Elements
+        let lastFrameTime = 0;
+        
+        // DOM Elements
         const video = document.getElementById('webcam');
         const canvas = document.getElementById('canvas');
         const ctx = canvas.getContext('2d');
-        const statusDiv = document.getElementById('status');
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const loadingStatus = document.getElementById('loading-status');
         const cameraSelect = document.getElementById('camera-select');
-        const confSlider = document.getElementById('conf-slider');
-        const confValue = document.getElementById('conf-value');
-        const loader = document.getElementById('loader');
+        const thresholdSlider = document.getElementById('threshold-slider');
+        const thresholdValue = document.getElementById('threshold-value');
+        const fpsDisplay = document.getElementById('fps-display');
+        
+        // Warna untuk setiap kelas
+        const colors = CLASS_NAMES.map(() => '#' + Math.floor(Math.random()*16777215).toString(16).padStart(6, '0'));
 
-        const colors = CLASS_NAMES.map(() => '#' + Math.floor(Math.random()*16777215).toString(16));
-
-        // --- HANDLERS ---
-        confSlider.addEventListener('input', (e) => {
-            CONF_THRESHOLD = parseFloat(e.target.value);
-            confValue.innerText = Math.round(CONF_THRESHOLD * 100) + '%';
-        });
-
-        cameraSelect.addEventListener('change', (e) => {
-            // Jika user memilih manual dari dropdown
-            setupCamera(e.target.value);
-        });
-
-        // --- CAMERA FUNCTIONS (REVISED) ---
-
-        async function getCameras() {
+        // --- 1. INISIALISASI APLIKASI ---
+        async function initApp() {
             try {
-                await navigator.mediaDevices.getUserMedia({ video: true }); // Minta izin dulu
-                const devices = await navigator.mediaDevices.enumerateDevices();
-                const videoDevices = devices.filter(device => device.kind === 'videoinput');
+                // A. Setup Backend WebGL
+                loadingStatus.innerText = "Mengaktifkan WebGL...";
+                await tf.setBackend('webgl');
+                await tf.ready();
 
-                cameraSelect.innerHTML = ""; 
-                
-                videoDevices.forEach((device, index) => {
-                    const option = document.createElement('option');
-                    option.value = device.deviceId;
-                    option.text = device.label || `Kamera ${index + 1}`;
-                    cameraSelect.appendChild(option);
-                });
+                // B. Load Model
+                loadingStatus.innerText = "Mengunduh & Memuat Model YOLOv8...";
+                model = await tf.loadGraphModel(MODEL_URL);
+
+                // C. Warmup Model (Pemanasan agar inferensi pertama cepat)
+                loadingStatus.innerText = "Pemanasan Model (Warmup)...";
+                const dummyInput = tf.zeros([1, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE, 3]);
+                const warmupResult = await model.executeAsync(dummyInput);
+                tf.dispose([dummyInput, warmupResult]); // Bersihkan memori
+
+                // D. Setup Kamera
+                loadingStatus.innerText = "Mencari Kamera...";
+                await populateCameraList();
+                await setupCamera(); // Default: Auto (Environment/Belakang)
+
+                // Selesai
+                loadingOverlay.style.display = 'none';
+                isDetecting = true;
+                detectFrame(); // Mulai loop deteksi
+
             } catch (error) {
-                console.error("Gagal akses kamera:", error);
+                console.error("Initialization Error:", error);
+                loadingStatus.innerText = `Error: ${error.message}. Cek Konsol.`;
+                loadingStatus.style.color = 'red';
             }
+        }
+
+        // --- 2. FUNGSI KAMERA ---
+        async function populateCameraList() {
+            const devices = await navigator.mediaDevices.enumerateDevices();
+            const videoDevices = devices.filter(device => device.kind === 'videoinput');
+            
+            cameraSelect.innerHTML = '';
+            if (videoDevices.length === 0) {
+                 cameraSelect.innerHTML = '<option>Tidak ada kamera ditemukan</option>';
+                 return;
+            }
+
+            videoDevices.forEach((device, index) => {
+                const option = document.createElement('option');
+                option.value = device.deviceId;
+                option.text = device.label || `Kamera ${index + 1}`;
+                cameraSelect.appendChild(option);
+            });
         }
 
         async function setupCamera(deviceId = null) {
@@ -262,22 +232,13 @@
                 currentStream.getTracks().forEach(track => track.stop());
             }
 
-            // --- LOGIKA UTAMA KAMERA BELAKANG ---
-            let videoConstraints = {};
-
-            if (deviceId) {
-                // 1. Jika User memilih dari dropdown -> Pakai ID tersebut
-                videoConstraints = { deviceId: { exact: deviceId } };
-            } else {
-                // 2. Jika Awal Buka (belum pilih) -> Pakai 'environment' (Kamera Belakang)
-                videoConstraints = { facingMode: 'environment' };
-            }
-
+            // Konfigurasi constraints: Prioritaskan 'environment' (belakang) jika tidak ada ID spesifik
             const constraints = {
                 video: {
+                    deviceId: deviceId ? { exact: deviceId } : undefined,
+                    facingMode: deviceId ? undefined : 'environment', 
                     width: { ideal: 640 },
-                    height: { ideal: 480 },
-                    ...videoConstraints
+                    height: { ideal: 480 }
                 },
                 audio: false
             };
@@ -286,21 +247,16 @@
                 currentStream = await navigator.mediaDevices.getUserMedia(constraints);
                 video.srcObject = currentStream;
 
-                return new Promise(resolve => {
+                return new Promise((resolve) => {
                     video.onloadedmetadata = () => {
+                        // Sinkronkan ukuran canvas dengan video yang tampil
                         canvas.width = video.videoWidth;
                         canvas.height = video.videoHeight;
-                        
-                        // Cek apakah kamera depan atau belakang yang aktif
+
+                        // Cek facingMode untuk efek mirror
                         const track = currentStream.getVideoTracks()[0];
                         const settings = track.getSettings();
-                        
-                        // Update Dropdown agar sesuai dengan kamera yang dipilih otomatis
-                        if (settings.deviceId && cameraSelect.options.length > 0) {
-                             cameraSelect.value = settings.deviceId;
-                        }
-
-                        // Mirror efek hanya jika kamera depan (user facing)
+                        // Jika kamera depan ('user'), tambahkan class mirror
                         if (settings.facingMode === 'user') {
                             video.classList.add('mirror');
                             canvas.classList.add('mirror');
@@ -309,140 +265,158 @@
                             canvas.classList.remove('mirror');
                         }
 
+                        // Update dropdown ke kamera yang aktif
+                        if (settings.deviceId) {
+                             // Cari opsi yang sesuai dan set selected
+                             Array.from(cameraSelect.options).forEach(opt => {
+                                 if(opt.value === settings.deviceId) opt.selected = true;
+                             });
+                        }
+
                         resolve();
                     };
                 });
             } catch (err) {
-                alert("Gagal membuka kamera: " + err.message);
-                // Fallback jika 'environment' gagal, coba kamera apa saja
-                if (!deviceId) {
-                   // setupCamera(null); // Warning: bisa infinite loop jika semua gagal
-                }
-            }
-        }
-
-        // --- MODEL & DETECTION ---
-
-        async function init() {
-            try {
-                await tf.setBackend('webgl');
-                model = await tf.loadGraphModel(MODEL_URL);
-                
-                // Warmup
-                const dummy = tf.zeros([1, 640, 640, 3]);
-                await model.executeAsync(dummy);
-                tf.dispose(dummy);
-
-                // 1. Isi Dropdown dulu
-                await getCameras(); 
-
-                // 2. Jalankan kamera (Tanpa ID -> Otomatis cari kamera belakang)
-                await setupCamera(); 
-                
-                loader.style.opacity = '0';
-                setTimeout(() => loader.remove(), 500);
-                
-                statusDiv.innerText = "Siap! Arahkan ke buah.";
-                detectFrame();
-
-            } catch (err) {
+                alert("Gagal akses kamera: " + err.message);
                 console.error(err);
-                document.getElementById('loading-text').innerText = "Gagal memuat Model.";
             }
         }
 
+        // --- 3. CORE DETEKSI (YOLOv8 Post-processing) ---
         async function detectFrame() {
-            if (video.readyState < 2 || !model) {
+            if (!isDetecting || video.readyState < 2) {
                 requestAnimationFrame(detectFrame);
                 return;
             }
 
-            // Preprocessing
-            const inputTensor = tf.tidy(() => {
-                 return tf.image.resizeBilinear(tf.browser.fromPixels(video), [640, 640])
-                    .div(255.0).expandDims(0);
+            // Hitung FPS
+            const now = performance.now();
+            const fps = 1000 / (now - lastFrameTime);
+            lastFrameTime = now;
+            fpsDisplay.innerText = `FPS: ${fps.toFixed(1)}`;
+
+            // --- A. Preprocessing & Inference (tf.tidy untuk manajemen memori otomatis) ---
+            const [boxes, scores, classes] = tf.tidy(() => {
+                const inputTensor = tf.browser.fromPixels(video)
+                    .resizeBilinear([MODEL_INPUT_SIZE, MODEL_INPUT_SIZE]) // Resize ke 640x640
+                    .div(255.0) // Normalisasi [0,1]
+                    .expandDims(0); // Batch dimension [1, 640, 640, 3]
+
+                // RAW Output YOLOv8: [1, 20, 8400] -> [Batch, Channels, Anchors]
+                const rawOutput = model.predict(inputTensor);
+
+                // Transpose agar mudah diproses: [1, 8400, 20]
+                const transposedOutput = rawOutput.transpose([0, 2, 1]).squeeze(0); // [8400, 20]
+
+                // Pisahkan koordinat (4 kolom pertama) dan skor kelas (16 kolom sisanya)
+                const rawBoxes = transposedOutput.slice([0, 0], [-1, 4]); // [cx, cy, w, h]
+                const rawScores = transposedOutput.slice([0, 4], [-1, -1]); // 16 kelas
+
+                // Cari skor tertinggi dan indeks kelasnya untuk setiap anchor
+                const maxScores = rawScores.max(1); // Skor tertinggi per baris
+                const maxClasses = rawScores.argMax(1); // Indeks kelas tertinggi
+
+                // Konversi [cx, cy, w, h] ke [y1, x1, y2, x2] untuk NMS
+                const boxesYXYX = tf.tidy(() => {
+                    const cx = rawBoxes.slice([0, 0], [-1, 1]);
+                    const cy = rawBoxes.slice([0, 1], [-1, 1]);
+                    const w = rawBoxes.slice([0, 2], [-1, 1]);
+                    const h = rawBoxes.slice([0, 3], [-1, 1]);
+                    
+                    const y1 = cy.sub(h.div(2));
+                    const x1 = cx.sub(w.div(2));
+                    const y2 = cy.add(h.div(2));
+                    const x2 = cx.add(w.div(2));
+                    return tf.concat([y1, x1, y2, x2], 1);
+                });
+
+                return [boxesYXYX, maxScores, maxClasses];
             });
 
-            try {
-                const res = await model.executeAsync(inputTensor);
-                
-                // Transpose & Process
-                const transRes = res.transpose([0, 2, 1]);
-                
-                const boxes = tf.tidy(() => {
-                    const w = transRes.slice([0, 0, 2], [-1, -1, 1]);
-                    const h = transRes.slice([0, 0, 3], [-1, -1, 1]);
-                    const x = transRes.slice([0, 0, 0], [-1, -1, 1]);
-                    const y = transRes.slice([0, 0, 1], [-1, -1, 1]);
-                    
-                    const y1 = y.sub(h.div(2));
-                    const x1 = x.sub(w.div(2));
-                    const y2 = y.add(h.div(2));
-                    const x2 = x.add(w.div(2));
-                    return tf.concat([y1, x1, y2, x2], 2).squeeze(0);
-                });
+            // --- B. Non-Max Suppression (Async) ---
+            // Filter box yang tumpang tindih berdasarkan IoU dan Threshold
+            const nmsIndices = await tf.image.nonMaxSuppressionAsync(
+                boxes, scores, 
+                50, // Max output boxes
+                IOU_THRESHOLD, 
+                detectionThreshold
+            );
+            
+            // --- C. Ambil data hasil filter dari GPU ke CPU ---
+            const validIndices = nmsIndices.dataSync();
+            const boxesData = boxes.dataSync();
+            const scoresData = scores.dataSync();
+            const classesData = classes.dataSync();
 
-                const [scores, classes] = tf.tidy(() => {
-                    const rawScores = transRes.slice([0, 0, 4], [-1, -1, 16]).squeeze(0);
-                    return [rawScores.max(1), rawScores.argMax(1)];
-                });
+            // Bersihkan semua tensor yang tidak ter-cover tf.tidy
+            tf.dispose([boxes, scores, classes, nmsIndices]);
 
-                const nms = await tf.image.nonMaxSuppressionAsync(boxes, scores, 50, IOU_THRESHOLD, CONF_THRESHOLD);
-                const detIndices = nms.dataSync(); 
+            // --- D. Render Hasil ---
+            renderPredictions(validIndices, boxesData, scoresData, classesData);
 
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                
-                const scaleX = canvas.width / 640;
-                const scaleY = canvas.height / 640;
-                
-                const boxesArr = boxes.dataSync();
-                const scoresArr = scores.dataSync();
-                const classesArr = classes.dataSync();
-
-                for (let i = 0; i < detIndices.length; i++) {
-                    const idx = detIndices[i];
-                    const score = scoresArr[idx];
-                    const labelIdx = classesArr[idx];
-                    const label = CLASS_NAMES[labelIdx] || 'Unknown';
-                    const color = colors[labelIdx] || '#00ffcc';
-
-                    const y1 = boxesArr[idx * 4] * scaleY;
-                    const x1 = boxesArr[idx * 4 + 1] * scaleX;
-                    const y2 = boxesArr[idx * 4 + 2] * scaleY;
-                    const x2 = boxesArr[idx * 4 + 3] * scaleX;
-
-                    const width = x2 - x1;
-                    const height = y2 - y1;
-
-                    ctx.strokeStyle = color;
-                    ctx.lineWidth = 3;
-                    
-                    ctx.shadowColor = color;
-                    ctx.shadowBlur = 10;
-                    ctx.strokeRect(x1, y1, width, height);
-                    ctx.shadowBlur = 0; 
-
-                    ctx.fillStyle = color;
-                    const text = `${label} ${(score*100).toFixed(0)}%`;
-                    const textW = ctx.measureText(text).width;
-                    ctx.fillRect(x1, y1 - 25, textW + 10, 25);
-
-                    ctx.fillStyle = '#000'; 
-                    ctx.font = 'bold 16px Segoe UI';
-                    ctx.fillText(text, x1 + 5, y1 - 7);
-                }
-
-                tf.dispose([res, transRes, boxes, scores, classes, nms]);
-
-            } catch(e) {
-                console.error(e);
-            } finally {
-                tf.dispose(inputTensor);
-                requestAnimationFrame(detectFrame);
-            }
+            requestAnimationFrame(detectFrame);
         }
 
-        init();
+        function renderPredictions(indices, boxes, scores, classes) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // Faktor skala untuk mengembalikan koordinat (dari 640x640 ke ukuran video asli)
+            const scaleX = canvas.width / MODEL_INPUT_SIZE;
+            const scaleY = canvas.height / MODEL_INPUT_SIZE;
+
+            indices.forEach(idx => {
+                const score = scores[idx];
+                const classIdx = classes[idx];
+                const label = CLASS_NAMES[classIdx] || 'Unknown';
+                const color = colors[classIdx];
+
+                // Koordinat [y1, x1, y2, x2] dikali skala
+                const y1 = boxes[idx * 4] * scaleY;
+                const x1 = boxes[idx * 4 + 1] * scaleX;
+                const y2 = boxes[idx * 4 + 2] * scaleY;
+                const x2 = boxes[idx * 4 + 3] * scaleX;
+                const width = x2 - x1;
+                const height = y2 - y1;
+
+                // 1. Gambar Box
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 3;
+                // Efek shadow agar lebih jelas
+                ctx.shadowColor = 'black'; ctx.shadowBlur = 4;
+                ctx.strokeRect(x1, y1, width, height);
+                ctx.shadowBlur = 0;
+
+                // 2. Gambar Latar Belakang Label
+                ctx.fillStyle = color;
+                const textStr = `${label} ${Math.round(score * 100)}%`;
+                ctx.font = "bold 16px sans-serif";
+                const textWidth = ctx.measureText(textStr).width;
+                const textHeight = 22;
+                // Gambar di atas box, kalau mentok atas pindah ke dalam
+                const textY = y1 - textHeight < 0 ? y1 : y1 - textHeight;
+                ctx.fillRect(x1, textY, textWidth + 8, textHeight);
+
+                // 3. Gambar Teks
+                ctx.fillStyle = "#000000"; // Teks hitam agar kontras
+                ctx.fillText(textStr, x1 + 4, textY + 16);
+            });
+        }
+
+        // --- EVENT LISTENERS ---
+        // Ganti kamera saat dropdown berubah
+        cameraSelect.addEventListener('change', (e) => {
+            setupCamera(e.target.value);
+        });
+
+        // Update threshold saat slider digeser
+        thresholdSlider.addEventListener('input', (e) => {
+            detectionThreshold = parseFloat(e.target.value);
+            thresholdValue.innerText = `${Math.round(detectionThreshold * 100)}%`;
+        });
+
+        // Mulai Aplikasi
+        initApp();
+
     </script>
 </body>
 </html>
